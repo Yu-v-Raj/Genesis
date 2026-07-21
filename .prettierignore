@@ -1,0 +1,10 @@
+node_modules/
+.next/
+out/
+coverage/
+dist/
+build/
+.venv/
+venv/
+*.lock
+docZZZ.zip

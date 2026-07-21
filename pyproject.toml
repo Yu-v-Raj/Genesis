@@ -1,0 +1,77 @@
+[project]
+name = "genesis"
+version = "0.1.0"
+description = "Genesis Agent Operating System monorepo"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "pydantic-settings>=2.6,<3.0",
+    "sqlalchemy[asyncio]>=2.0,<3.0",
+    "asyncpg>=0.29,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend", "backend.*"]
+namespaces = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [
+    ".venv",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "ASYNC",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend", "applications", "packages"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+exclude = [
+    "^build/",
+    "^dist/",
+    "^\\.venv/",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["backend", "applications", "tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["backend", "applications", "packages"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
