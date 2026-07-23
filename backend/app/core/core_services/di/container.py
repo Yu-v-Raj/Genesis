@@ -62,6 +62,11 @@ class DependencyContainer:
 
         return factory(self)
 
+    def registered_keys(self) -> tuple[ServiceKey, ...]:
+        """Return a snapshot of registered service keys."""
+        with self._lock:
+            return tuple(self._singletons) + tuple(self._factories)
+
     def _ensure_not_registered(self, key: ServiceKey) -> None:
         if key in self._singletons or key in self._factories:
             raise ServiceAlreadyRegisteredError(key)

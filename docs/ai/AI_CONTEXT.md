@@ -33,6 +33,14 @@ Completed:
 - Development workflow established
 - Git repository initialized
 - GitHub repository created
+- Dependency Injection Container
+- Service Registry
+- Runtime Lifecycle Manager
+- Event Bus
+- Tool Manager
+- Plugin System
+- Memory Framework
+- Workflow Engine
 
 Current Milestone:
 
