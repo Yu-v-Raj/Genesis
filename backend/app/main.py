@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from backend.app.core.api.router import api_router
 from backend.app.core.core_services.config.settings import settings
 from backend.app.core.core_services.logging.logger import logger
 
@@ -24,18 +25,4 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
-@app.get("/", tags=["service"])
-async def root() -> dict[str, str]:
-    """Return basic service metadata."""
-    return {
-        "application": settings.APP_NAME,
-        "status": "running",
-        "version": settings.APP_VERSION,
-    }
-
-
-@app.get("/health", tags=["service"])
-async def health() -> dict[str, str]:
-    """Report service liveness."""
-    return {"status": "ok"}
+app.include_router(api_router)
