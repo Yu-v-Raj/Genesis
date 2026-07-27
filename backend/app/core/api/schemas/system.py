@@ -17,31 +17,51 @@ class SystemRuntimeResponse(BaseModel):
     state: str
 
 
-class SystemServicesResponse(BaseModel):
-    """Registered Core service names."""
+class ServiceInfo(BaseModel):
+    name: str
+    description: str
+    status: str
 
-    services: list[str]
+
+class ToolInfo(BaseModel):
+    name: str
+    description: str
+    status: str
+
+
+class PluginInfo(BaseModel):
+    name: str
+    description: str
+    status: str
+
+
+class MemoryProviderInfo(BaseModel):
+    name: str
+    description: str
+    status: str
+
+
+class WorkflowInfo(BaseModel):
+    name: str
+    description: str
+    status: str
+
+
+class SystemServicesResponse(BaseModel):
+    services: list[ServiceInfo]
 
 
 class SystemToolsResponse(BaseModel):
-    """Registered tool names."""
-
-    tools: list[str]
+    tools: list[ToolInfo]
 
 
 class SystemPluginsResponse(BaseModel):
-    """Registered plugin names."""
-
-    plugins: list[str]
+    plugins: list[PluginInfo]
 
 
 class SystemMemoryResponse(BaseModel):
-    """Registered memory provider names."""
-
-    providers: list[str]
+    providers: list[MemoryProviderInfo]
 
 
 class SystemWorkflowsResponse(BaseModel):
-    """Registered workflow names."""
-
-    workflows: list[str]
+    workflows: list[WorkflowInfo]

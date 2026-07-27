@@ -198,3 +198,17 @@ This document defines the structural architecture of Genesis. It intentionally d
 - Plugin manifest format and sandboxing mechanics → see `08-Plugin-System.md`
 
 Where any future document appears to conflict with the dependency rules or layer responsibilities defined here, this document takes precedence until formally revised.
+
+## 12. Observability and Runtime Events
+
+Observability is provided as a dedicated Core module with three responsibilities: typed event contracts in the domain layer, application services for structured logging and runtime heartbeats, and an infrastructure adapter for bounded in-memory event history. Core producers publish through the Event Bus contract and do not depend on FastAPI, the dashboard, or a storage technology.
+
+The FastAPI observability routes are adapters over the event history service. Future persistent stores, distributed transports, and WebSocket broadcasters can subscribe to the same Event Bus without changing event producers. See `11-Observability.md` for event publication, subscription, logging, and API usage.
+
+## 13. Real-Time Communication
+
+The real-time layer is an adapter over the Event Bus, not a second event system. It manages client connections through an application-scoped WebSocket Manager and forwards already-published events through a Realtime Gateway. This preserves a single event producer boundary while allowing dashboards and future clients to receive incremental updates. See `12-Real-Time-Communication.md` for the transport contract.
+
+## 14. Agent Runtime Foundation
+
+The Agent Runtime treats Agents as process-like Core records, independent of any LLM or execution strategy. Its registry owns identity, lifecycle metadata, and typed lifecycle events only. Future execution, scheduling, model adapters, tools, and memory services build on the registry through published contracts rather than becoming dependencies of the Agent domain. See `13-Agent-Runtime.md` for the subsystem contract.

@@ -13,6 +13,9 @@ from backend.app.core.api.dependencies.system import (
     get_workflow_engine,
 )
 from backend.app.core.api.schemas.system import (
+    MemoryProviderInfo,
+    PluginInfo,
+    ServiceInfo,
     SystemHealthResponse,
     SystemMemoryResponse,
     SystemPluginsResponse,
@@ -20,6 +23,8 @@ from backend.app.core.api.schemas.system import (
     SystemServicesResponse,
     SystemToolsResponse,
     SystemWorkflowsResponse,
+    ToolInfo,
+    WorkflowInfo,
 )
 from backend.app.core.core_services.service_registry import ServiceKey, ServiceRegistry
 from backend.app.core.core_services.config.settings import settings
@@ -31,6 +36,36 @@ from backend.app.core.workflow_engine.application.workflow_engine import Workflo
 
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+
+SERVICE_METADATA = {
+    "EventBus": "Central event communication service.",
+    "ToolManager": "Registers and executes tools.",
+    "PluginManager": "Loads and manages plugins.",
+    "MemoryManager": "Coordinates memory providers.",
+    "WorkflowEngine": "Executes workflow execution.",
+    "RuntimeLifecycleManager": "Controls the Genesis runtime lifecycle.",
+    "AgentRegistry": "Tracks Agent Runtime metadata.",
+}
+
+TOOL_DEFAULT = {
+    "description": "Genesis tool.",
+    "status": "online",
+}
+
+PLUGIN_DEFAULT = {
+    "description": "Genesis plugin.",
+    "status": "loaded",
+}
+
+MEMORY_DEFAULT = {
+    "description": "Memory provider.",
+    "status": "active",
+}
+
+WORKFLOW_DEFAULT = {
+    "description": "Workflow.",
+    "status": "available",
+}
 
 
 @router.get("/health", response_model=SystemHealthResponse)
@@ -57,7 +92,16 @@ async def system_services(
     registry: ServiceRegistry = Depends(get_service_registry),
 ) -> SystemServicesResponse:
     """Return the Core services registered for this application instance."""
-    return SystemServicesResponse(services=[_service_key_name(key) for key in registry.registered_keys()])
+    return SystemServicesResponse(
+    services=[
+        ServiceInfo(
+            name=name,
+            description=SERVICE_METADATA.get(name, "Genesis Core service."),
+            status="online",
+        )
+        for name in (_service_key_name(key) for key in registry.registered_keys())
+    ]
+)
 
 
 @router.get("/tools", response_model=SystemToolsResponse)
@@ -65,7 +109,16 @@ async def system_tools(
     tool_manager: ToolManager = Depends(get_tool_manager),
 ) -> SystemToolsResponse:
     """Return names of currently registered tools."""
-    return SystemToolsResponse(tools=list(tool_manager.registered_names()))
+    return SystemToolsResponse(
+    tools=[
+        ToolInfo(
+            name=name,
+            description=TOOL_DEFAULT["description"],
+            status=TOOL_DEFAULT["status"],
+        )
+        for name in tool_manager.registered_names()
+    ]
+)
 
 
 @router.get("/plugins", response_model=SystemPluginsResponse)
@@ -73,7 +126,16 @@ async def system_plugins(
     plugin_manager: PluginManager = Depends(get_plugin_manager),
 ) -> SystemPluginsResponse:
     """Return names of currently registered plugins."""
-    return SystemPluginsResponse(plugins=list(plugin_manager.registered_names()))
+    return SystemPluginsResponse(
+    plugins=[
+        PluginInfo(
+            name=name,
+            description=PLUGIN_DEFAULT["description"],
+            status=PLUGIN_DEFAULT["status"],
+        )
+        for name in plugin_manager.registered_names()
+    ]
+)
 
 
 @router.get("/memory", response_model=SystemMemoryResponse)
@@ -81,7 +143,18 @@ async def system_memory(
     memory_manager: MemoryManager = Depends(get_memory_manager),
 ) -> SystemMemoryResponse:
     """Return names of currently registered memory providers."""
-    return SystemMemoryResponse(providers=list(await memory_manager.registered_names()))
+    providers = await memory_manager.registered_names()
+
+    return SystemMemoryResponse(
+        providers=[
+            MemoryProviderInfo(
+                name=name,
+                description=MEMORY_DEFAULT["description"],
+                status=MEMORY_DEFAULT["status"],
+            )
+            for name in providers
+        ]
+    )
 
 
 @router.get("/workflows", response_model=SystemWorkflowsResponse)
@@ -89,7 +162,18 @@ async def system_workflows(
     workflow_engine: WorkflowEngine = Depends(get_workflow_engine),
 ) -> SystemWorkflowsResponse:
     """Return names of currently registered workflows."""
-    return SystemWorkflowsResponse(workflows=list(await workflow_engine.registered_names()))
+    workflows = await workflow_engine.registered_names()
+
+    return SystemWorkflowsResponse(
+        workflows=[
+            WorkflowInfo(
+                name=name,
+                description=WORKFLOW_DEFAULT["description"],
+                status=WORKFLOW_DEFAULT["status"],
+            )
+            for name in workflows
+        ]
+    )
 
 
 def _service_key_name(key: ServiceKey) -> str:

@@ -37,16 +37,23 @@ def test_system_services_returns_registered_core_services(client: TestClient) ->
     response = client.get("/api/system/services")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "services": [
-            "EventBus",
-            "ToolManager",
-            "PluginManager",
-            "MemoryManager",
-            "WorkflowEngine",
-            "RuntimeLifecycleManager",
-        ]
-    }
+    services = response.json()["services"]
+    assert [service["name"] for service in services] == [
+        "EventBus",
+        "EventHistory",
+        "WebSocketManager",
+        "RealtimeGateway",
+        "AgentRegistry",
+        "LoggerService",
+        "ToolManager",
+        "PluginManager",
+        "MemoryManager",
+        "WorkflowEngine",
+        "RuntimeLifecycleManager",
+        "HeartbeatService",
+    ]
+    assert all(service["status"] == "online" for service in services)
+    assert all(service["description"] for service in services)
 
 
 @pytest.mark.parametrize(
@@ -61,7 +68,7 @@ def test_system_services_returns_registered_core_services(client: TestClient) ->
 def test_system_manager_endpoints_return_live_empty_registries(
     client: TestClient,
     path: str,
-    expected: dict[str, list[str]],
+    expected: dict[str, list[object]],
 ) -> None:
     """Manager endpoints expose their current registrations without mutation."""
     response = client.get(path)

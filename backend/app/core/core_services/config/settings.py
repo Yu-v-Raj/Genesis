@@ -9,6 +9,8 @@ from backend.app.core.core_services.config.constants import (
     DEFAULT_APP_VERSION,
     DEFAULT_DATABASE_URL,
     DEFAULT_ENVIRONMENT,
+    DEFAULT_EVENT_HISTORY_SIZE,
+    DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
     DEFAULT_HOST,
     DEFAULT_LOG_LEVEL,
     DEFAULT_PORT,
@@ -32,6 +34,11 @@ class Settings(BaseSettings):
     HOST: str = DEFAULT_HOST
     PORT: int = Field(default=DEFAULT_PORT, ge=1, le=65535)
     LOG_LEVEL: str = DEFAULT_LOG_LEVEL
+    EVENT_HISTORY_SIZE: int = Field(default=DEFAULT_EVENT_HISTORY_SIZE, ge=1)
+    HEARTBEAT_INTERVAL_SECONDS: float = Field(
+        default=DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+        gt=0,
+    )
     DATABASE_URL: str = DEFAULT_DATABASE_URL
     OPENAI_API_KEY: SecretStr | None = None
     ANTHROPIC_API_KEY: SecretStr | None = None
