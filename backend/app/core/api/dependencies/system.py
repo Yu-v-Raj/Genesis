@@ -7,6 +7,7 @@ from starlette.requests import HTTPConnection
 
 from backend.app.core.core_services.service_registry import ServiceRegistry
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
+from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.memory.application.memory_manager import MemoryManager
 from backend.app.core.observability.infrastructure.event_history import EventHistory
 from backend.app.core.plugin_system.application.plugin_manager import PluginManager
@@ -47,6 +48,13 @@ def get_agent_registry(
 ) -> AgentRegistry:
     """Resolve the app-scoped Agent Runtime registry."""
     return registry.resolve(AgentRegistry)
+
+
+def get_agent_manager(
+    registry: ServiceRegistry = Depends(get_service_registry),
+) -> AgentManager:
+    """Resolve the app-scoped Agent Runtime lifecycle manager."""
+    return registry.resolve(AgentManager)
 
 
 def get_tool_manager(

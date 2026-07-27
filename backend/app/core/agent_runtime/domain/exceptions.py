@@ -19,3 +19,12 @@ class AgentNotFoundError(AgentRegistryError):
 
     def __init__(self, agent_id: UUID) -> None:
         super().__init__(f"Agent '{agent_id}' is not registered.")
+
+
+class AgentLifecycleError(AgentRegistryError):
+    """Raised when an Agent lifecycle transition is not permitted."""
+
+    def __init__(self, agent_id: UUID, current_state: str, requested_state: str) -> None:
+        super().__init__(
+            f"Agent '{agent_id}' cannot transition from '{current_state}' to '{requested_state}'."
+        )

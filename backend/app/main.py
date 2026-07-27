@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.core.api.router import api_router
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
+from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.core_services.config.settings import settings
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.core_services.service_registry import ServiceRegistry
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     websocket_manager = WebSocketManager()
     realtime_gateway = RealtimeGateway(websocket_manager)
     agent_registry = AgentRegistry(event_bus)
+    agent_manager = AgentManager(agent_registry, event_bus)
     tool_manager = ToolManager()
     plugin_manager = PluginManager()
     memory_manager = MemoryManager()
@@ -59,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(WebSocketManager, websocket_manager)
     service_registry.register_singleton(RealtimeGateway, realtime_gateway)
     service_registry.register_singleton(AgentRegistry, agent_registry)
+    service_registry.register_singleton(AgentManager, agent_manager)
     service_registry.register_singleton(LoggerService, logger_service)
     service_registry.register_singleton(ToolManager, tool_manager)
     service_registry.register_singleton(PluginManager, plugin_manager)
@@ -75,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "WebSocketManager",
         "RealtimeGateway",
         "AgentRegistry",
+        "AgentManager",
         "LoggerService",
         "ToolManager",
         "PluginManager",

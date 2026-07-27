@@ -45,6 +45,7 @@ SERVICE_METADATA = {
     "WorkflowEngine": "Executes workflow execution.",
     "RuntimeLifecycleManager": "Controls the Genesis runtime lifecycle.",
     "AgentRegistry": "Tracks Agent Runtime metadata.",
+    "AgentManager": "Coordinates Agent Runtime lifecycle and context.",
 }
 
 TOOL_DEFAULT = {

@@ -116,6 +116,76 @@ class AgentMetadataUpdated(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AgentCreated(Event):
+    """Published when the Agent Manager creates a runtime record."""
+
+    event_type: str = field(init=False, default="agent.created")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentInitialized(Event):
+    """Published when an Agent reaches its initialized idle state."""
+
+    event_type: str = field(init=False, default="agent.initialized")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentStarted(Event):
+    """Published when an Agent enters RUNNING."""
+
+    event_type: str = field(init=False, default="agent.started")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentPaused(Event):
+    """Published when an Agent enters PAUSED."""
+
+    event_type: str = field(init=False, default="agent.paused")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentResumed(Event):
+    """Published when an Agent resumes RUNNING."""
+
+    event_type: str = field(init=False, default="agent.resumed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentCompleted(Event):
+    """Published when an Agent enters COMPLETED."""
+
+    event_type: str = field(init=False, default="agent.completed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentFailed(Event):
+    """Published when an Agent enters FAILED."""
+
+    event_type: str = field(init=False, default="agent.failed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentStopped(Event):
+    """Published when an Agent enters STOPPED."""
+
+    event_type: str = field(init=False, default="agent.stopped")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentDeleted(Event):
+    """Published when the Agent Manager deletes a runtime record."""
+
+    event_type: str = field(init=False, default="agent.deleted")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentContextUpdated(Event):
+    """Published when an Agent's runtime-only context changes."""
+
+    event_type: str = field(init=False, default="agent.context_updated")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TaskStarted(Event):
     """Published when a future runtime task begins."""
 
