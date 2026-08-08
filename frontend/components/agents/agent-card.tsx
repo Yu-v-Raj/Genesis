@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   BarChart3, Bot, Brain, Check, ChevronDown, CircleStop, ClipboardList, Clock3, Code2, Cpu,
-  FileText, Globe2, LoaderCircle, Pause, Play, Trash2, XCircle,
+  FileText, Globe2, LoaderCircle, Pause, Play, Rocket, Square, Trash2, XCircle,
 } from "lucide-react";
 
+import { ExecutionBadge, ExecutionPanel, formatDuration } from "@/components/agents/execution-panel";
 import type { Agent, AgentContext } from "@/types/agents";
+import type { Execution } from "@/types/executions";
 import type { RealtimeEvent } from "@/types/realtime";
 
 type LifecycleAction = "initialize" | "start" | "pause" | "resume" | "stop" | "delete";
@@ -16,8 +18,13 @@ interface AgentCardProps {
   context: AgentContext | null | undefined;
   events: RealtimeEvent[];
   pending: boolean;
+  executions: Execution[];
+  pendingExecution: boolean;
   onAction: (agentId: string, action: LifecycleAction) => Promise<boolean>;
   onLoadContext: (agentId: string) => Promise<void>;
+  onExecute: (agentId: string) => Promise<boolean>;
+  onCancelExecution: (executionId: string) => Promise<boolean>;
+  onLoadExecutions: (agentId: string) => Promise<void>;
 }
 
 const statusPresentation: Record<Agent["status"], { className: string; Icon: typeof Clock3 }> = {
@@ -65,16 +72,22 @@ function AgentTypeIcon({ type }: { type: string }) {
   return <Icon className="h-4 w-4" aria-hidden="true" />;
 }
 
-export function AgentCard({ agent, context, events, pending, onAction, onLoadContext }: AgentCardProps) {
+export function AgentCard({ agent, context, events, pending, executions, pendingExecution, onAction, onLoadContext, onExecute, onCancelExecution, onLoadExecutions }: AgentCardProps) {
   const [expanded, setExpanded] = useState(false);
   const agentEvents = events.filter((event) => event.payload.agent_id === agent.id);
   const status = statusPresentation[agent.status];
   const StatusIcon = status.Icon;
+  const currentExecution = executions.find((execution) => !["completed", "failed", "cancelled"].includes(execution.status));
+  const lastExecution = executions[0];
+  const canExecute = !pending && !pendingExecution && currentExecution === undefined && !["created", "initializing", "stopped"].includes(agent.status);
 
   async function toggleContext() {
     const nextExpanded = !expanded;
     setExpanded(nextExpanded);
-    if (nextExpanded && context === undefined) await onLoadContext(agent.id);
+    if (nextExpanded) {
+      if (context === undefined) await onLoadContext(agent.id);
+      await onLoadExecutions(agent.id);
+    }
   }
 
   return (
@@ -101,9 +114,22 @@ export function AgentCard({ agent, context, events, pending, onAction, onLoadCon
               {agent.tags.map((tag) => <span key={tag} className="rounded-md border border-white/[0.06] bg-white/[0.04] px-2 py-1 text-xs text-muted-foreground">{tag}</span>)}
             </div>
           )}
+          <dl className="mt-5 grid grid-cols-2 gap-2 border-t border-border pt-4 text-xs sm:grid-cols-4">
+            <Metric label="Executions" value={executions.length.toString()} />
+            <Metric label="Current" value={currentExecution ? <CurrentDuration execution={currentExecution} /> : "Ready"} />
+            <Metric label="Last" value={lastExecution ? lastExecution.status : "None"} capitalize />
+            <Metric label="Latest result" value={lastExecution?.result?.output ?? lastExecution?.error ?? "No result yet"} truncate />
+          </dl>
         </div>
 
         <div className="flex shrink-0 flex-wrap gap-2">
+          <button type="button" onClick={() => void onExecute(agent.id)} disabled={!canExecute} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-white transition-all hover:-translate-y-0.5 hover:bg-primary/85 disabled:cursor-not-allowed disabled:opacity-45">
+            {pendingExecution ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Rocket className="h-3.5 w-3.5" />}
+            {pendingExecution ? "Launching..." : "Execute"}
+          </button>
+          {currentExecution && <button type="button" onClick={() => void onCancelExecution(currentExecution.execution_id)} disabled={pendingExecution} className="inline-flex items-center gap-1.5 rounded-lg border border-red-400/25 px-3 py-2 text-xs font-medium text-red-200 transition-colors hover:bg-red-400/10 disabled:cursor-not-allowed disabled:opacity-50">
+            {pendingExecution ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />} Cancel execution
+          </button>}
           {actionsFor(agent.status).map((action) => (
             <button key={action} type="button" onClick={() => void onAction(agent.id, action)} disabled={pending} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${action === "delete" ? "border-red-400/20 text-red-200 hover:bg-red-400/10" : "border-border text-foreground hover:bg-white/[0.06]"}`}>
               {pending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ActionIcon action={action} />}
@@ -114,12 +140,25 @@ export function AgentCard({ agent, context, events, pending, onAction, onLoadCon
       </div>
 
       <button type="button" onClick={() => void toggleContext()} className="mt-6 inline-flex items-center gap-1.5 border-t border-transparent pt-1 text-xs font-medium text-primary transition-colors hover:text-primary/80" aria-expanded={expanded}>
-        Runtime context & timeline <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        Runtime context & execution history <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
       </button>
 
-      {expanded && <div className="mt-4 grid gap-6 border-t border-border pt-5 lg:grid-cols-2"><ContextPanel context={context} /><Timeline events={agentEvents} /></div>}
+      {expanded && <div className="mt-4 grid gap-6 border-t border-border pt-5"><div className="grid gap-6 lg:grid-cols-2"><ContextPanel context={context} /><Timeline events={agentEvents} /></div><ExecutionPanel agentName={agent.name} executions={executions} events={events} /></div>}
     </article>
   );
+}
+
+function Metric({ label, value, capitalize = false, truncate = false }: { label: string; value: React.ReactNode; capitalize?: boolean; truncate?: boolean }) { return <div className="min-w-0"><dt className="text-muted-foreground">{label}</dt><dd className={`mt-1 text-foreground ${capitalize ? "capitalize" : ""} ${truncate ? "truncate" : ""}`} title={truncate && typeof value === "string" ? value : undefined}>{value}</dd></div>; }
+
+function CurrentDuration({ execution }: { execution: Execution }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (execution.started_at === null || execution.duration !== null) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(interval);
+  }, [execution.duration, execution.started_at]);
+  const duration = execution.duration ?? (execution.started_at === null ? null : (now - new Date(execution.started_at).getTime()) / 1_000);
+  return <>{formatDuration(duration)}</>;
 }
 
 function ContextPanel({ context }: { context: AgentContext | null | undefined }) {

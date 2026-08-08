@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AgentApiError, AgentService } from "@/services/agent.service";
 import { EventHistoryService } from "@/services/event-history.service";
-import { useRealtime } from "@/hooks/use-realtime";
+import type { RealtimeState } from "@/hooks/use-realtime";
 import type { RealtimeEvent } from "@/types/realtime";
 import type { Agent, AgentContext, CreateAgentInput } from "@/types/agents";
 
@@ -53,7 +53,7 @@ export interface AgentsState {
   loading: boolean;
   error: string | null;
   pendingAgentIds: ReadonlySet<string>;
-  connectionStatus: ReturnType<typeof useRealtime>["connectionStatus"];
+  connectionStatus: RealtimeState["connectionStatus"];
   latestAgentEvent: RealtimeEvent | null;
   createAgent: (input: CreateAgentInput) => Promise<boolean>;
   runLifecycleAction: (
@@ -65,14 +65,14 @@ export interface AgentsState {
 }
 
 /** Coordinates Agent Runtime REST snapshots with its existing WebSocket event stream. */
-export function useAgents(): AgentsState {
+export function useAgents(realtime: RealtimeState): AgentsState {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [events, setEvents] = useState<RealtimeEvent[]>([]);
   const [contexts, setContexts] = useState<Record<string, AgentContext | null | undefined>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingAgentIds, setPendingAgentIds] = useState<Set<string>>(new Set());
-  const { connectionStatus, latestEvent } = useRealtime();
+  const { connectionStatus, latestEvent } = realtime;
   const latestAgentEvent = latestEvent !== null && isAgentEvent(latestEvent) ? latestEvent : null;
 
   const refreshEvents = useCallback(async () => {

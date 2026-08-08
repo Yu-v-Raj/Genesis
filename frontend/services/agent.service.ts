@@ -4,6 +4,7 @@ import type {
   AgentListResponse,
   CreateAgentInput,
 } from "@/types/agents";
+import { requestJson } from "@/services/api-client";
 
 const AGENT_API_BASE_URL =
   process.env.NEXT_PUBLIC_AGENT_API_BASE_URL ?? "http://127.0.0.1:8000/api/agents";
@@ -19,32 +20,13 @@ export class AgentApiError extends Error {
 }
 
 async function request<T>(endpoint: string, init: RequestInit = {}): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${AGENT_API_BASE_URL}${endpoint}`, {
-      ...init,
-      headers: { Accept: "application/json", ...init.headers },
-      cache: "no-store",
-      credentials: "same-origin",
-    });
-  } catch {
-    throw new AgentApiError("Unable to connect to the Genesis Agent Runtime API.");
-  }
-
-  if (!response.ok) {
-    let detail = `Request failed (${response.status} ${response.statusText}).`;
-    try {
-      const body: unknown = await response.json();
-      if (typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string") {
-        detail = body.detail;
-      }
-    } catch {
-      // Keep the stable fallback message when the error response is not JSON.
-    }
-    throw new AgentApiError(detail, response.status);
-  }
-
-  return response.json() as Promise<T>;
+  return requestJson(
+    AGENT_API_BASE_URL,
+    endpoint,
+    init,
+    "Unable to connect to the Genesis Agent Runtime API.",
+    (message, status) => new AgentApiError(message, status)
+  );
 }
 
 function lifecycle(agentId: string, operation: "initialize" | "start" | "pause" | "resume" | "stop"): Promise<Agent> {

@@ -19,6 +19,12 @@ const NOTIFIABLE_EVENTS = new Set([
   "agent.resumed",
   "agent.stopped",
   "agent.deleted",
+  "execution.created",
+  "execution.queued",
+  "execution.started",
+  "execution.completed",
+  "execution.failed",
+  "execution.cancelled",
 ]);
 
 interface RealtimeNotificationsProps {
@@ -72,8 +78,22 @@ export function RealtimeNotifications({
 
   if (notifications.length === 0) return null;
 
+  function notificationTitle(event: RealtimeEvent): string {
+    const titles: Record<string, string> = {
+      "execution.created": "Execution created",
+      "execution.queued": "Execution queued",
+      "execution.started": "Execution started",
+      "execution.completed": "Execution completed successfully",
+      "execution.failed": "Execution failed",
+      "execution.cancelled": "Execution cancelled",
+    };
+    return titles[event.event_type] ?? event.event_type.replaceAll(".", " ");
+  }
+
   function notificationIcon(event: RealtimeEvent) {
-    if (event.event_type === "error.occurred") return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />;
+    if (event.event_type === "error.occurred" || event.event_type === "execution.failed") return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />;
+    if (event.event_type === "execution.cancelled") return <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />;
+    if (event.event_type === "execution.completed") return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
     if (event.event_type.startsWith("agent.")) return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
     return <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />;
   }
@@ -86,7 +106,7 @@ export function RealtimeNotifications({
           {notificationIcon(event)}
           <div className="min-w-0 flex-1">
             <p className="text-xs font-medium text-foreground">
-              {event.event_type.replaceAll(".", " ")}
+              {notificationTitle(event)}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">Received from {event.source}</p>
           </div>
