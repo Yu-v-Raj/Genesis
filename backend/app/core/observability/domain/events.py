@@ -186,6 +186,55 @@ class AgentContextUpdated(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionCreated(Event):
+    """Published when an execution record is created."""
+
+    event_type: str = field(init=False, default="execution.created")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionQueued(Event):
+    """Published when an execution is placed in the executor queue."""
+
+    event_type: str = field(init=False, default="execution.queued")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionStarted(Event):
+    """Published when deterministic execution work begins."""
+
+    event_type: str = field(init=False, default="execution.started")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionProgress(Event):
+    """Published when an execution reaches a meaningful runtime step."""
+
+    event_type: str = field(init=False, default="execution.progress")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionCompleted(Event):
+    """Published when an execution succeeds."""
+
+    event_type: str = field(init=False, default="execution.completed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionFailed(Event):
+    """Published when an execution fails."""
+
+    event_type: str = field(init=False, default="execution.failed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionCancelled(Event):
+    """Published when an execution is cancelled."""
+
+    event_type: str = field(init=False, default="execution.cancelled")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TaskStarted(Event):
     """Published when a future runtime task begins."""
 

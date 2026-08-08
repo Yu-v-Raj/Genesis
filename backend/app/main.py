@@ -13,6 +13,9 @@ from backend.app.core.agent_runtime.application.agent_manager import AgentManage
 from backend.app.core.core_services.config.settings import settings
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.core_services.service_registry import ServiceRegistry
+from backend.app.core.execution_runtime.application.execution_executor import ExecutionExecutor
+from backend.app.core.execution_runtime.application.execution_history import ExecutionHistory
+from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager
 from backend.app.core.memory.application.memory_manager import MemoryManager
 from backend.app.core.observability.application.heartbeat import HeartbeatService
 from backend.app.core.observability.application.logger_service import LoggerService
@@ -40,6 +43,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     realtime_gateway = RealtimeGateway(websocket_manager)
     agent_registry = AgentRegistry(event_bus)
     agent_manager = AgentManager(agent_registry, event_bus)
+    execution_history = ExecutionHistory()
+    execution_executor = ExecutionExecutor()
+    execution_manager = ExecutionManager(
+        agent_registry, execution_executor, execution_history, event_bus
+    )
     tool_manager = ToolManager()
     plugin_manager = PluginManager()
     memory_manager = MemoryManager()
@@ -62,6 +70,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(RealtimeGateway, realtime_gateway)
     service_registry.register_singleton(AgentRegistry, agent_registry)
     service_registry.register_singleton(AgentManager, agent_manager)
+    service_registry.register_singleton(ExecutionHistory, execution_history)
+    service_registry.register_singleton(ExecutionExecutor, execution_executor)
+    service_registry.register_singleton(ExecutionManager, execution_manager)
     service_registry.register_singleton(LoggerService, logger_service)
     service_registry.register_singleton(ToolManager, tool_manager)
     service_registry.register_singleton(PluginManager, plugin_manager)
@@ -79,6 +90,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "RealtimeGateway",
         "AgentRegistry",
         "AgentManager",
+        "ExecutionHistory",
+        "ExecutionExecutor",
+        "ExecutionManager",
         "LoggerService",
         "ToolManager",
         "PluginManager",

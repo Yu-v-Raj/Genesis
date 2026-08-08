@@ -1,1 +1,1 @@
-
+"""FastAPI endpoint adapters."""

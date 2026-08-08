@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bell } from "lucide-react";
+import { CheckCircle2, CircleAlert, Info, X } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 
 import type { RealtimeEvent } from "@/types/realtime";
 
@@ -12,6 +13,12 @@ const NOTIFIABLE_EVENTS = new Set([
   "workflow.registered",
   "memory_provider.registered",
   "error.occurred",
+  "agent.created",
+  "agent.started",
+  "agent.paused",
+  "agent.resumed",
+  "agent.stopped",
+  "agent.deleted",
 ]);
 
 interface RealtimeNotificationsProps {
@@ -65,19 +72,28 @@ export function RealtimeNotifications({
 
   if (notifications.length === 0) return null;
 
+  function notificationIcon(event: RealtimeEvent) {
+    if (event.event_type === "error.occurred") return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />;
+    if (event.event_type.startsWith("agent.")) return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
+    return <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />;
+  }
+
   return (
-    <div className="fixed right-5 top-5 z-50 flex w-80 flex-col gap-2">
+    <div className="fixed right-4 top-4 z-50 flex w-[calc(100%-2rem)] max-w-sm flex-col gap-2 sm:right-5 sm:top-5 sm:w-80">
+      <AnimatePresence initial={false}>
       {notifications.map((event) => (
-        <div key={event.id} className="flex gap-2 rounded-md border border-border bg-surface p-3 shadow-lg">
-          <Bell className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-          <div>
+        <motion.div key={event.id} initial={{ opacity: 0, y: -8, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, x: 12, scale: 0.98 }} transition={{ duration: 0.18 }} className="flex gap-3 rounded-xl border border-border bg-surface/95 p-3.5 shadow-xl shadow-black/20 backdrop-blur">
+          {notificationIcon(event)}
+          <div className="min-w-0 flex-1">
             <p className="text-xs font-medium text-foreground">
               {event.event_type.replaceAll(".", " ")}
             </p>
-            <p className="text-xs text-muted-foreground">Received from {event.source}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">Received from {event.source}</p>
           </div>
-        </div>
+          <button type="button" onClick={() => dismiss(event.id)} className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground" aria-label="Dismiss notification"><X className="h-3.5 w-3.5" /></button>
+        </motion.div>
       ))}
+      </AnimatePresence>
     </div>
   );
 }

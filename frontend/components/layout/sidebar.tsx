@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   LayoutDashboard,
@@ -20,23 +22,24 @@ import { cn } from "@/lib/utils";
 interface NavItem {
   label: string;
   icon: React.ElementType;
-  active?: boolean;
+  href?: string;
 }
 
 const navItems: NavItem[] = [
-  { label: "Dashboard", icon: LayoutDashboard, active: true },
+  { label: "Dashboard", icon: LayoutDashboard, href: "/" },
   { label: "Core", icon: Cpu },
   { label: "Tools", icon: Wrench },
   { label: "Plugins", icon: Puzzle },
   { label: "Memory", icon: BrainCircuit },
   { label: "Workflows", icon: Workflow },
-  { label: "Agents", icon: Bot },
+  { label: "Agents", icon: Bot, href: "/agents" },
   { label: "Monitoring", icon: Activity },
   { label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const pathname = usePathname();
 
   return (
     <motion.aside
@@ -66,28 +69,36 @@ export function Sidebar() {
       <nav className="flex flex-1 flex-col gap-1 px-2 py-2">
         {navItems.map((item) => {
           const Icon = item.icon;
-          return (
-            <button
-              key={item.label}
-              disabled={!item.active}
+          const active = item.href === pathname;
+          const className = cn(
+            "group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+            active
+              ? "bg-white/5 text-foreground"
+              : item.href
+                ? "text-muted-foreground hover:bg-white/[0.07] hover:text-foreground"
+                : "cursor-not-allowed text-muted-foreground/60"
+          );
+          const content = <>
+            <Icon
               className={cn(
-                "group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                item.active
-                  ? "bg-white/5 text-foreground"
-                  : "cursor-not-allowed text-muted-foreground/60",
-                item.active && "hover:bg-white/[0.07]"
+                "h-4 w-4 shrink-0",
+                active || item.href ? "text-primary" : "text-muted-foreground/60"
               )}
+            />
+            {!collapsed && <span className="truncate">{item.label}</span>}
+          </>;
+          return item.href ? (
+            <Link
+              key={item.label}
+              href={item.href}
+              className={className}
               title={collapsed ? item.label : undefined}
             >
-              <Icon
-                className={cn(
-                  "h-4 w-4 shrink-0",
-                  item.active
-                    ? "text-primary"
-                    : "text-muted-foreground/60"
-                )}
-              />
-              {!collapsed && <span className="truncate">{item.label}</span>}
+              {content}
+            </Link>
+          ) : (
+            <button key={item.label} disabled className={className} title={collapsed ? item.label : undefined}>
+              {content}
             </button>
           );
         })}
