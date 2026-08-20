@@ -25,6 +25,9 @@ const NOTIFIABLE_EVENTS = new Set([
   "execution.completed",
   "execution.failed",
   "execution.cancelled",
+  "tool.executed",
+  "tool.completed",
+  "tool.failed",
 ]);
 
 interface RealtimeNotificationsProps {
@@ -86,14 +89,17 @@ export function RealtimeNotifications({
       "execution.completed": "Execution completed successfully",
       "execution.failed": "Execution failed",
       "execution.cancelled": "Execution cancelled",
+      "tool.executed": "Tool execution started",
+      "tool.completed": "Tool execution completed",
+      "tool.failed": "Tool execution failed",
     };
     return titles[event.event_type] ?? event.event_type.replaceAll(".", " ");
   }
 
   function notificationIcon(event: RealtimeEvent) {
-    if (event.event_type === "error.occurred" || event.event_type === "execution.failed") return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />;
+    if (event.event_type === "error.occurred" || event.event_type === "execution.failed" || event.event_type === "tool.failed") return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />;
     if (event.event_type === "execution.cancelled") return <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />;
-    if (event.event_type === "execution.completed") return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
+    if (event.event_type === "execution.completed" || event.event_type === "tool.completed") return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
     if (event.event_type.startsWith("agent.")) return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
     return <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />;
   }

@@ -74,6 +74,48 @@ class ToolRegistered(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ToolExecuted(Event):
+    """Published immediately before a Tool invocation."""
+
+    event_type: str = field(init=False, default="tool.executed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ToolCompleted(Event):
+    """Published after a Tool invocation succeeds."""
+
+    event_type: str = field(init=False, default="tool.completed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ToolFailed(Event):
+    """Published after a Tool invocation fails validation or execution."""
+
+    event_type: str = field(init=False, default="tool.failed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskCreated(Event):
+    """Published when Tool Runtime creates a task for execution work."""
+
+    event_type: str = field(init=False, default="task.created")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskCompleted(Event):
+    """Published after a Tool Runtime task completes."""
+
+    event_type: str = field(init=False, default="task.completed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskFailed(Event):
+    """Published after a Tool Runtime task fails."""
+
+    event_type: str = field(init=False, default="task.failed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class WorkflowRegistered(Event):
     """Published when a workflow is registered."""
 

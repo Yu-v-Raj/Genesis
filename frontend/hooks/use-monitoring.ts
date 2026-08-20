@@ -11,11 +11,13 @@ import type { Agent } from "@/types/agents";
 import type { Execution } from "@/types/executions";
 import type { RealtimeEvent } from "@/types/realtime";
 import type { HealthApiResponse, RuntimeApiResponse, ServiceApiItem } from "@/types/system";
+import type { ToolApiItem } from "@/types/system";
 
 export interface MonitoringData {
   health: HealthApiResponse;
   runtime: RuntimeApiResponse;
   services: ServiceApiItem[];
+  tools: ToolApiItem[];
   agents: Agent[];
   executions: Execution[];
   events: RealtimeEvent[];
@@ -50,10 +52,11 @@ export function useMonitoring(): {
     setLoading(true);
     setError(null);
     try {
-      const [health, runtime, services, agents, executions, history] = await Promise.all([
+      const [health, runtime, services, tools, agents, executions, history] = await Promise.all([
         SystemService.getHealth(),
         SystemService.getRuntime(),
         SystemService.getServices(),
+        SystemService.getTools(),
         AgentService.list(),
         ExecutionService.list(),
         EventHistoryService.recent(),
@@ -63,6 +66,7 @@ export function useMonitoring(): {
         health,
         runtime,
         services: services.services,
+        tools: tools.tools,
         agents: agents.agents,
         executions: executions.executions,
         events: history.events,

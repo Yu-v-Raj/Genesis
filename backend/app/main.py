@@ -30,6 +30,10 @@ from backend.app.core.realtime.application.gateway import RealtimeGateway
 from backend.app.core.realtime.application.websocket_manager import WebSocketManager
 from backend.app.core.runtime.application.lifecycle_manager import RuntimeLifecycleManager
 from backend.app.core.tool_manager.application.tool_manager import ToolManager
+from backend.app.core.tool_runtime.application.tool_executor import ToolExecutor
+from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
+from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
+from backend.app.core.tool_runtime.domain.tool import builtin_tools
 from backend.app.core.workflow_engine.application.workflow_engine import WorkflowEngine
 
 
@@ -49,6 +53,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         agent_registry, execution_executor, execution_history, event_bus
     )
     tool_manager = ToolManager()
+    tool_registry = ToolRegistry(event_bus)
+    tool_executor = ToolExecutor(tool_registry, event_bus)
+    tool_runtime_manager = ToolRuntimeManager(tool_registry, tool_executor, event_bus)
+    for tool in builtin_tools():
+        await tool_runtime_manager.register(tool)
+    execution_executor.set_tool_manager(tool_runtime_manager)
     plugin_manager = PluginManager()
     memory_manager = MemoryManager()
     workflow_engine = WorkflowEngine(event_bus)
@@ -75,6 +85,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(ExecutionManager, execution_manager)
     service_registry.register_singleton(LoggerService, logger_service)
     service_registry.register_singleton(ToolManager, tool_manager)
+    service_registry.register_singleton(ToolRegistry, tool_registry)
+    service_registry.register_singleton(ToolExecutor, tool_executor)
+    service_registry.register_singleton(ToolRuntimeManager, tool_runtime_manager)
     service_registry.register_singleton(PluginManager, plugin_manager)
     service_registry.register_singleton(MemoryManager, memory_manager)
     service_registry.register_singleton(WorkflowEngine, workflow_engine)
@@ -95,6 +108,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "ExecutionManager",
         "LoggerService",
         "ToolManager",
+        "ToolRegistry",
+        "ToolExecutor",
+        "ToolRuntimeManager",
         "PluginManager",
         "MemoryManager",
         "WorkflowEngine",

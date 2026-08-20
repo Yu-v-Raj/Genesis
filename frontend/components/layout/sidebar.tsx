@@ -28,12 +28,12 @@ interface NavItem {
 const navItems: NavItem[] = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/" },
   { label: "Core", icon: Cpu },
-  { label: "Tools", icon: Wrench },
+  { label: "Tools", icon: Wrench, href: "/tools" },
   { label: "Plugins", icon: Puzzle },
   { label: "Memory", icon: BrainCircuit },
   { label: "Workflows", icon: Workflow },
   { label: "Agents", icon: Bot, href: "/agents" },
-  { label: "Monitoring", icon: Activity, href: "/#monitoring" },
+  { label: "Monitoring", icon: Activity, href: "/monitoring" },
   { label: "Settings", icon: Settings },
 ];
 

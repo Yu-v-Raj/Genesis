@@ -9,6 +9,7 @@ from backend.app.core.core_services.service_registry import ServiceRegistry
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager
+from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.memory.application.memory_manager import MemoryManager
 from backend.app.core.observability.infrastructure.event_history import EventHistory
 from backend.app.core.plugin_system.application.plugin_manager import PluginManager
@@ -63,6 +64,13 @@ def get_execution_manager(
 ) -> ExecutionManager:
     """Resolve the app-scoped Execution Runtime lifecycle manager."""
     return registry.resolve(ExecutionManager)
+
+
+def get_tool_runtime_manager(
+    registry: ServiceRegistry = Depends(get_service_registry),
+) -> ToolRuntimeManager:
+    """Resolve the app-scoped Tool Runtime manager."""
+    return registry.resolve(ToolRuntimeManager)
 
 
 def get_tool_manager(
