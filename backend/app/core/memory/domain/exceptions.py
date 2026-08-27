@@ -21,3 +21,9 @@ class MemoryProviderNotFoundError(MemoryManagerError):
 
 class InvalidMemoryProviderNameError(MemoryManagerError):
     """Raised when a provider name is empty or not a string."""
+
+class MemoryNotFoundError(MemoryManagerError):
+    def __init__(self, memory_id: object) -> None: super().__init__(f"Memory {memory_id} was not found.")
+
+class MemoryOwnershipError(MemoryManagerError):
+    def __init__(self, memory_id: object) -> None: super().__init__(f"Memory {memory_id} does not belong to this agent.")

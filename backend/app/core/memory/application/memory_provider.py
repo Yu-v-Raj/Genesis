@@ -1,0 +1,23 @@
+"""Provider boundary for agent-owned Memory Runtime records."""
+
+from abc import ABC, abstractmethod
+from uuid import UUID
+
+from backend.app.core.memory.domain.memory_record import MemoryRecord
+
+
+class MemoryProvider(ABC):
+    @abstractmethod
+    async def create(self, memory: MemoryRecord) -> MemoryRecord: ...
+    @abstractmethod
+    async def get(self, memory_id: UUID) -> MemoryRecord | None: ...
+    @abstractmethod
+    async def list(self, agent_id: UUID | None = None) -> tuple[MemoryRecord, ...]: ...
+    @abstractmethod
+    async def search(self, query: str, agent_id: UUID) -> tuple[MemoryRecord, ...]: ...
+    @abstractmethod
+    async def update(self, memory: MemoryRecord) -> MemoryRecord | None: ...
+    @abstractmethod
+    async def delete(self, memory_id: UUID) -> MemoryRecord | None: ...
+    @abstractmethod
+    async def count(self, agent_id: UUID | None = None) -> int: ...

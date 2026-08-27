@@ -30,7 +30,7 @@ const navItems: NavItem[] = [
   { label: "Core", icon: Cpu },
   { label: "Tools", icon: Wrench, href: "/tools" },
   { label: "Plugins", icon: Puzzle },
-  { label: "Memory", icon: BrainCircuit },
+  { label: "Memory", icon: BrainCircuit, href: "/memory" },
   { label: "Workflows", icon: Workflow },
   { label: "Agents", icon: Bot, href: "/agents" },
   { label: "Monitoring", icon: Activity, href: "/monitoring" },

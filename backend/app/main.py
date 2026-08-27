@@ -17,6 +17,7 @@ from backend.app.core.execution_runtime.application.execution_executor import Ex
 from backend.app.core.execution_runtime.application.execution_history import ExecutionHistory
 from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager
 from backend.app.core.memory.application.memory_manager import MemoryManager
+from backend.app.core.memory.infrastructure.in_memory_provider import InMemoryProvider
 from backend.app.core.observability.application.heartbeat import HeartbeatService
 from backend.app.core.observability.application.logger_service import LoggerService
 from backend.app.core.observability.domain.events import (
@@ -60,7 +61,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await tool_runtime_manager.register(tool)
     execution_executor.set_tool_manager(tool_runtime_manager)
     plugin_manager = PluginManager()
-    memory_manager = MemoryManager()
+    memory_provider = InMemoryProvider()
+    memory_manager = MemoryManager(memory_provider, event_bus)
     workflow_engine = WorkflowEngine(event_bus)
     runtime_manager = RuntimeLifecycleManager(service_registry)
     started_at = monotonic()
@@ -90,6 +92,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(ToolRuntimeManager, tool_runtime_manager)
     service_registry.register_singleton(PluginManager, plugin_manager)
     service_registry.register_singleton(MemoryManager, memory_manager)
+    service_registry.register_singleton(InMemoryProvider, memory_provider)
     service_registry.register_singleton(WorkflowEngine, workflow_engine)
     service_registry.register_singleton(RuntimeLifecycleManager, runtime_manager)
     service_registry.register_singleton(HeartbeatService, heartbeat_service)
@@ -113,6 +116,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "ToolRuntimeManager",
         "PluginManager",
         "MemoryManager",
+        "InMemoryProvider",
         "WorkflowEngine",
         "RuntimeLifecycleManager",
         "HeartbeatService",

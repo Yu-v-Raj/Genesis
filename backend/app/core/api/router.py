@@ -9,6 +9,7 @@ from backend.app.core.api.routers.observability import router as observability_r
 from backend.app.core.api.routers.realtime import router as realtime_router
 from backend.app.core.api.routers.service import router as service_router
 from backend.app.core.api.routers.system import router as system_router
+from backend.app.core.api.routers.memory import router as memory_router
 
 
 api_router = APIRouter()
@@ -19,3 +20,4 @@ api_router.include_router(observability_router)
 api_router.include_router(realtime_router)
 api_router.include_router(service_router)
 api_router.include_router(system_router)
+api_router.include_router(memory_router)

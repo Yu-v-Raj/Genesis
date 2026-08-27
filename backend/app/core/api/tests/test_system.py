@@ -54,8 +54,9 @@ def test_system_services_returns_registered_core_services(client: TestClient) ->
         "ToolExecutor",
         "ToolRuntimeManager",
         "PluginManager",
-        "MemoryManager",
-        "WorkflowEngine",
+            "MemoryManager",
+            "InMemoryProvider",
+            "WorkflowEngine",
         "RuntimeLifecycleManager",
         "HeartbeatService",
     ]

@@ -12,6 +12,10 @@ const NOTIFIABLE_EVENTS = new Set([
   "plugin.loaded",
   "workflow.registered",
   "memory_provider.registered",
+  "memory.created",
+  "memory.updated",
+  "memory.deleted",
+  "memory.retrieved",
   "error.occurred",
   "agent.created",
   "agent.started",
@@ -92,6 +96,10 @@ export function RealtimeNotifications({
       "tool.executed": "Tool execution started",
       "tool.completed": "Tool execution completed",
       "tool.failed": "Tool execution failed",
+      "memory.created": "Memory created",
+      "memory.updated": "Memory updated",
+      "memory.deleted": "Memory deleted",
+      "memory.retrieved": "Memory retrieved",
     };
     return titles[event.event_type] ?? event.event_type.replaceAll(".", " ");
   }

@@ -128,6 +128,15 @@ class MemoryProviderRegistered(Event):
 
     event_type: str = field(init=False, default="memory_provider.registered")
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MemoryCreated(Event): event_type: str = field(init=False, default="memory.created")
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MemoryUpdated(Event): event_type: str = field(init=False, default="memory.updated")
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MemoryDeleted(Event): event_type: str = field(init=False, default="memory.deleted")
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MemoryRetrieved(Event): event_type: str = field(init=False, default="memory.retrieved")
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgentRegistered(Event):
