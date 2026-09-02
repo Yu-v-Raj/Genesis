@@ -36,6 +36,7 @@ from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeMa
 from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
 from backend.app.core.tool_runtime.domain.tool import builtin_tools
 from backend.app.core.workflow_engine.application.workflow_engine import WorkflowEngine
+from backend.app.core.workflow_runtime.application.workflow_manager import WorkflowManager
 
 
 @asynccontextmanager
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     memory_provider = InMemoryProvider()
     memory_manager = MemoryManager(memory_provider, event_bus)
     workflow_engine = WorkflowEngine(event_bus)
+    workflow_manager = WorkflowManager(tool_runtime_manager, event_bus)
     runtime_manager = RuntimeLifecycleManager(service_registry)
     started_at = monotonic()
     logger_service = LoggerService(event_bus)
@@ -94,6 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(MemoryManager, memory_manager)
     service_registry.register_singleton(InMemoryProvider, memory_provider)
     service_registry.register_singleton(WorkflowEngine, workflow_engine)
+    service_registry.register_singleton(WorkflowManager, workflow_manager)
     service_registry.register_singleton(RuntimeLifecycleManager, runtime_manager)
     service_registry.register_singleton(HeartbeatService, heartbeat_service)
     app.state.service_registry = service_registry
@@ -118,6 +121,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "MemoryManager",
         "InMemoryProvider",
         "WorkflowEngine",
+        "WorkflowManager",
         "RuntimeLifecycleManager",
         "HeartbeatService",
     ):

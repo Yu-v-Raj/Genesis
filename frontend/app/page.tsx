@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Activity, ArrowUpRight, Bot, CheckCircle2, Clock3, Cpu, Gauge, HeartPulse, Plus, Radio, Server, Wifi, Wrench } from "lucide-react";
+import { Activity, ArrowUpRight, Bot, CheckCircle2, Clock3, Cpu, Gauge, HeartPulse, Plus, Radio, Server, Wifi, Wrench, Workflow } from "lucide-react";
 
 import { EventStream } from "@/components/dashboard/event-stream";
 import { ErrorState } from "@/components/dashboard/error-state";
@@ -14,6 +14,7 @@ import { StatsCardSkeleton, StatusCardSkeleton } from "@/components/dashboard/sk
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { useMonitoring } from "@/hooks/use-monitoring";
+import { useWorkflowSummary } from "@/hooks/use-workflow-summary";
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${Math.floor(seconds)}s`;
@@ -74,11 +75,13 @@ export function MonitoringDashboard() {
 
 export default function Home() {
   const { data, loading, error, connectionStatus, retry } = useMonitoring();
+  const workflowSummary = useWorkflowSummary();
   const quickStatistics = data ? [
     { label: "Running Agents", value: data.agents.filter((agent) => agent.status === "running").length, icon: Bot, tone: "text-emerald-300" },
     { label: "Running Executions", value: data.executions.filter((execution) => ["pending", "queued", "starting", "running"].includes(execution.status)).length, icon: Activity, tone: "text-amber-300" },
     { label: "Registered Tools", value: data.tools.length, icon: Wrench, tone: "text-primary" },
     { label: "Registered Services", value: data.services.length, icon: Server, tone: "text-foreground" },
+    { label: "Workflows", value: workflowSummary?.total ?? "—", detail: workflowSummary ? `${workflowSummary.running} running · ${workflowSummary.failed} failed` : "Workflow API unavailable", icon: Workflow, tone: workflowSummary?.failed ? "text-red-300" : "text-primary" },
   ] : [];
   const health = data ? [
     { label: "Runtime", value: data.runtime.state, icon: Cpu, tone: "text-primary" },
@@ -93,7 +96,7 @@ export default function Home() {
     {error && data === null ? <ErrorState message={error} onRetry={() => void retry()} isRetrying={loading} /> : <>
       {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-300"><span>{error}</span><button type="button" onClick={() => void retry()} className="rounded-md border border-red-400/25 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-400/10">Retry</button></div>}
       <section><h2 className="mb-3 text-sm font-semibold text-foreground">Quick Health</h2><div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{loading ? Array.from({ length: 4 }, (_, index) => <StatusCardSkeleton key={index} />) : health.map(({ label, value, icon: Icon, tone }) => <div key={label} className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/15"><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{label}</span><Icon className={`h-4 w-4 ${tone}`} /></div><p className="mt-2 truncate text-xl font-semibold capitalize text-foreground">{value}</p></div>)}</div></section>
-      <section><h2 className="mb-3 text-sm font-semibold text-foreground">Quick Statistics</h2><div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{loading ? Array.from({ length: 4 }, (_, index) => <StatsCardSkeleton key={index} />) : quickStatistics.map(({ label, value, icon: Icon, tone }) => <div key={label} className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/15"><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{label}</span><Icon className={`h-4 w-4 ${tone}`} /></div><p className="mt-2 text-xl font-semibold text-foreground">{value}</p></div>)}</div></section>
+      <section><h2 className="mb-3 text-sm font-semibold text-foreground">Quick Statistics</h2><div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{loading ? Array.from({ length: 4 }, (_, index) => <StatsCardSkeleton key={index} />) : quickStatistics.map(({ label, value, icon: Icon, tone, detail }) => <div key={label} className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/15"><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{label}</span><Icon className={`h-4 w-4 ${tone}`} /></div><p className="mt-2 text-xl font-semibold text-foreground">{value}</p>{detail && <p className="mt-1 text-[11px] text-muted-foreground">{detail}</p>}</div>)}</div></section>
       <section className="grid gap-5 lg:grid-cols-2"><div className="rounded-xl border border-border bg-surface p-5 shadow-sm"><h2 className="text-sm font-semibold text-foreground">Recent Activity</h2><p className="mt-1 text-xs text-muted-foreground">The latest activity across Genesis.</p><div className="mt-4 divide-y divide-border">{data?.events.slice(0, 8).map((event) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-xs font-medium text-foreground">{event.event_type.replaceAll(".", " ")}</p><p className="mt-1 truncate text-xs text-muted-foreground">{event.source}</p></div><time className="shrink-0 text-[11px] text-muted-foreground">{new Date(event.timestamp).toLocaleTimeString()}</time></div>) ?? <p className="py-8 text-center text-sm text-muted-foreground">Waiting for recent activity.</p>}</div></div><div className="rounded-xl border border-border bg-surface p-5 shadow-sm"><h2 className="text-sm font-semibold text-foreground">Quick Actions</h2><p className="mt-1 text-xs text-muted-foreground">Jump straight into common Genesis workflows.</p><div className="mt-4 grid gap-2 sm:grid-cols-2"><QuickAction href="/agents" icon={Plus} label="Create Agent" /><QuickAction href="/agents" icon={Bot} label="Open Agents" /><QuickAction href="/monitoring" icon={Activity} label="Open Monitoring" /><span title="The Tools page is not enabled in the current frontend."><button type="button" disabled className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2.5 text-left text-xs font-medium text-muted-foreground opacity-55"><span className="flex items-center gap-2"><Wrench className="h-3.5 w-3.5" />Open Tools</span><ArrowUpRight className="h-3.5 w-3.5" /></button></span></div></div></section>
     </>}
   </div></main></div></div>;

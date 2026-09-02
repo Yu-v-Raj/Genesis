@@ -31,7 +31,7 @@ const navItems: NavItem[] = [
   { label: "Tools", icon: Wrench, href: "/tools" },
   { label: "Plugins", icon: Puzzle },
   { label: "Memory", icon: BrainCircuit, href: "/memory" },
-  { label: "Workflows", icon: Workflow },
+  { label: "Workflows", icon: Workflow, href: "/workflows" },
   { label: "Agents", icon: Bot, href: "/agents" },
   { label: "Monitoring", icon: Activity, href: "/monitoring" },
   { label: "Settings", icon: Settings },

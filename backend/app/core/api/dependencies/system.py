@@ -17,6 +17,7 @@ from backend.app.core.realtime.application.websocket_manager import WebSocketMan
 from backend.app.core.runtime.application.lifecycle_manager import RuntimeLifecycleManager
 from backend.app.core.tool_manager.application.tool_manager import ToolManager
 from backend.app.core.workflow_engine.application.workflow_engine import WorkflowEngine
+from backend.app.core.workflow_runtime.application.workflow_manager import WorkflowManager
 
 
 def get_service_registry(connection: HTTPConnection) -> ServiceRegistry:
@@ -99,3 +100,10 @@ def get_workflow_engine(
 ) -> WorkflowEngine:
     """Resolve the app-scoped Workflow Engine."""
     return registry.resolve(WorkflowEngine)
+
+
+def get_workflow_manager(
+    registry: ServiceRegistry = Depends(get_service_registry),
+) -> WorkflowManager:
+    """Resolve the app-scoped dependency-aware Workflow Runtime manager."""
+    return registry.resolve(WorkflowManager)

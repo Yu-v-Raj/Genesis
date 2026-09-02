@@ -11,6 +11,18 @@ const MAX_REMEMBERED_NOTIFICATION_IDS = 500;
 const NOTIFIABLE_EVENTS = new Set([
   "plugin.loaded",
   "workflow.registered",
+  "workflow.created",
+  "workflow.queued",
+  "workflow.started",
+  "workflow.paused",
+  "workflow.resumed",
+  "workflow.completed",
+  "workflow.failed",
+  "workflow.cancelled",
+  "workflow.task.ready",
+  "workflow.task.started",
+  "workflow.task.completed",
+  "workflow.task.failed",
   "memory_provider.registered",
   "memory.created",
   "memory.updated",
@@ -100,14 +112,26 @@ export function RealtimeNotifications({
       "memory.updated": "Memory updated",
       "memory.deleted": "Memory deleted",
       "memory.retrieved": "Memory retrieved",
+      "workflow.created": "Workflow created",
+      "workflow.queued": "Workflow queued",
+      "workflow.started": "Workflow started",
+      "workflow.paused": "Workflow paused",
+      "workflow.resumed": "Workflow resumed",
+      "workflow.completed": "Workflow completed successfully",
+      "workflow.failed": "Workflow failed",
+      "workflow.cancelled": "Workflow cancelled",
+      "workflow.task.ready": "Workflow task ready",
+      "workflow.task.started": "Workflow task started",
+      "workflow.task.completed": "Workflow task completed",
+      "workflow.task.failed": "Workflow task failed",
     };
     return titles[event.event_type] ?? event.event_type.replaceAll(".", " ");
   }
 
   function notificationIcon(event: RealtimeEvent) {
-    if (event.event_type === "error.occurred" || event.event_type === "execution.failed" || event.event_type === "tool.failed") return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />;
+    if (event.event_type === "error.occurred" || event.event_type === "execution.failed" || event.event_type === "tool.failed" || event.event_type === "workflow.failed" || event.event_type === "workflow.task.failed") return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />;
     if (event.event_type === "execution.cancelled") return <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />;
-    if (event.event_type === "execution.completed" || event.event_type === "tool.completed") return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
+    if (event.event_type === "execution.completed" || event.event_type === "tool.completed" || event.event_type === "workflow.completed" || event.event_type === "workflow.task.completed") return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
     if (event.event_type.startsWith("agent.")) return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
     return <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />;
   }
