@@ -1,134 +1,699 @@
-# Genesis
+# 🤖 Genesis
 
-> **An extensible Agent Operating System for building autonomous AI applications.**
+## Your AI Agent Operating System
 
-Genesis provides the dependable infrastructure that agentic applications need: a unified runtime, memory system, workflow orchestration, plugin architecture, and human-approval controls. Applications bring domain intelligence; Genesis makes their execution predictable, observable, and extensible.
+> **Genesis is a modular AI Agent Operating System designed to provide the infrastructure required to build, run, coordinate, observe, and scale intelligent AI agents.**
 
-## Overview
+Genesis brings together **Agents, LLMs, Tools, Memory, Execution, Workflows, Events, Realtime Communication, and Observability** into one extensible platform.
 
-Teams building AI agents repeatedly rebuild execution loops, memory handling, coordination, tool integration, and safety controls. Genesis treats these as shared infrastructure concerns rather than application features.
+---
 
-The first reference application, **AI Product Manager**, will validate the Core by generating product-management artifacts while remaining entirely outside the Core's domain model.
+## 📖 Overview
 
-## Vision
+Modern AI agents are more than an LLM wrapped around a prompt. A production-grade agent needs infrastructure for reasoning, actions, memory, execution, coordination, communication, and monitoring.
 
-Genesis aims to become a general-purpose substrate for autonomous AI applications: applications should focus on their domain, while the platform provides reliable execution, auditable state, replaceable subsystems, and human oversight for consequential actions.
+Genesis provides:
 
-The central architectural rule is simple: **Applications depend on Core; Core never depends on Applications.**
+- 🤖 **Agent Runtime** — agent identity and lifecycle
+- 🧠 **LLM Runtime** — provider-independent model interaction
+- 🔧 **Tool Runtime** — capabilities agents can execute
+- 🧠 **Memory Runtime** — agent context and knowledge
+- ⚙️ **Execution Runtime** — units of work and execution state
+- 🔄 **Workflow Runtime** — multi-step task coordination
+- 📡 **EventBus** — typed event-driven communication
+- ⚡ **Realtime Layer** — WebSocket-based live updates
+- 📊 **Observability** — logs, events, health, and runtime visibility
 
-## Key Features
+Genesis is being built as a **foundation for autonomous and multi-agent systems**, rather than as a single-purpose AI application.
 
-- **Agent runtime** — lifecycle-managed execution with pause, resume, and termination semantics.
-- **Workflow orchestration** — declarative, graph-based coordination for multi-step and multi-agent work.
-- **Memory abstractions** — working and persistent memory behind replaceable interfaces.
-- **Plugin and tool systems** — extensible capabilities without modifying Core internals.
-- **Human approval gateway** — explicit checkpoints for important or irreversible actions.
-- **Observable autonomy** — logged state transitions, reconstructable workflows, and auditable decisions.
-- **Contract-first design** — stable public interfaces that let applications evolve independently of implementations.
+---
 
-## Architecture
+# 🎯 Why Genesis?
 
-```mermaid
-flowchart TB
-  apps["Applications\nProduct Manager v0.1 · Future Applications"]
-  contracts["Public Contracts / SDK"]
-  core["Genesis Core (Agent OS)\nRuntime · Workflow Engine · Memory · Plugins\nTools · Communication · Core Services · Approval Gateway"]
-  infra["Infrastructure Adapters\nPostgreSQL · Message Transport · External Tool APIs"]
-
-  apps --> contracts --> core --> infra
-```
-
-Genesis follows a layered, hexagonal-influenced architecture. Core exposes ports and public contracts; concrete infrastructure lives behind adapters. Applications consume public Core contracts only and never reach into Core internals.
-
-## Technology Stack
-
-| Area | Technology |
-| --- | --- |
-| Frontend | Next.js, React, TypeScript, Tailwind CSS |
-| Backend | FastAPI, Python |
-| Persistence | PostgreSQL, SQLAlchemy, Alembic |
-| Agent orchestration | LangGraph |
-| Authentication | JWT |
-| Tooling | pnpm, Ruff, MyPy, Pytest, Prettier |
-
-## Repository Structure
+Building an intelligent agent requires connecting many systems:
 
 ```text
-.
-├── core/                 # Application-agnostic Agent OS subsystems and public contracts
-├── applications/         # Applications built on Core (starting with product_manager)
-├── packages/             # Shared Python and TypeScript libraries
-├── infra/                # Deployment, migrations, and environment infrastructure
-├── docs/                 # Canonical architecture and engineering documentation
-├── scripts/              # Repository-wide automation
-├── tests/                # Integration, contract, and end-to-end tests
-└── .github/              # CI/CD workflows and GitHub templates
+LLM
+ │
+ ├── Tools
+ ├── Memory
+ ├── Execution
+ ├── Workflows
+ ├── Other Agents
+ ├── Events
+ └── Observability
 ```
 
-See [docs/04-Folder-Structure.md](docs/04-Folder-Structure.md) for the complete ownership and dependency rules.
+Without clear boundaries, these components quickly become tightly coupled.
 
-## Getting Started
+Genesis addresses this through:
 
-Genesis is currently in repository-foundation development. The application services have not yet been initialized.
+- 🧩 **Modularity**
+- 🔌 **Provider independence**
+- 🏗️ **Clean Architecture**
+- 🔄 **Composable execution**
+- 📡 **Event-driven communication**
+- ⚡ **Realtime visibility**
+- 🧪 **Testable infrastructure**
+- 🚀 **Extensible runtimes**
 
-### Prerequisites
+---
 
-- Git
-- Python 3.12+
-- Node.js 22+
-- pnpm 10+ (via Corepack)
+# ✨ Core Features
 
-### Prepare the workspace
+## 🤖 Agent Runtime
+
+Genesis provides a foundation for managing AI agents and their lifecycle.
+
+```text
+Created
+   ↓
+Initialized
+   ↓
+Idle
+   ↓
+Thinking
+   ↓
+Executing
+   ↓
+Waiting
+   ↓
+Completed
+   ↓
+Failed / Stopped
+```
+
+Agents are platform actors that can eventually reason through LLMs, use tools, access memory, and participate in workflows.
+
+---
+
+## 🧠 LLM Runtime
+
+Genesis abstracts model providers behind a common provider interface.
+
+### Currently integrated
+
+- OpenAI provider
+- Google Gemini provider
+- Provider registry
+- Provider-neutral message/request/response models
+- Generation settings
+- Usage tracking
+- Sanitized provider errors
+- LLM lifecycle events
+
+### Current Gemini flow
+
+```text
+Genesis LLM Runtime
+        ↓
+  Gemini Provider
+        ↓
+ google-genai SDK
+        ↓
+ Gemini 3.6 Flash
+        ↓
+ Generated Response
+```
+
+The provider abstraction allows additional LLM providers to be added without coupling the rest of Genesis to a specific SDK.
+
+---
+
+## 🔧 Tool Runtime
+
+Tools give agents capabilities outside the LLM.
+
+### Built-in tools
+
+- `echo`
+- `calculator`
+- `uuid`
+- `random_number`
+- `delay`
+
+The Tool Runtime provides:
+
+- Tool registry
+- Tool discovery
+- Validation
+- Execution
+- Execution history
+- Tool events
+- Capability metadata
+
+### Tool-calling concept
+
+```text
+User
+ ↓
+LLM
+ ↓
+Tool Call
+ ↓
+Tool Runtime
+ ↓
+Tool Result
+ ↓
+LLM
+ ↓
+Final Response
+```
+
+The LLM decides **what should happen** while the Tool Runtime executes the capability.
+
+---
+
+## 🧠 Memory Runtime
+
+Genesis provides a provider-based memory abstraction for storing agent context and knowledge.
+
+### Current capabilities
+
+- Agent-scoped memory
+- Create / update / delete
+- Deterministic search
+- Ownership validation
+- Bounded in-memory provider
+- Memory lifecycle events
+- Memory dashboard
+
+The architecture is designed so persistent and vector-based providers can be added later without changing the core memory API.
+
+---
+
+## ⚙️ Execution Runtime
+
+Execution represents a concrete unit of work.
+
+It provides:
+
+- Execution lifecycle management
+- Execution context
+- Cancellation/progress support
+- Bounded execution history
+- Tool-backed execution
+- Execution events
+
+```text
+Execution
+   ↓
+Task
+   ↓
+Tool / Agent / Runtime
+   ↓
+Result
+```
+
+Execution is separate from Agent lifecycle so that **"an agent exists"** and **"an agent is performing a job"** remain different concepts.
+
+---
+
+## 🔄 Workflow Runtime
+
+The Workflow Runtime coordinates multiple tasks and their dependencies.
+
+```text
+        A
+       /       B   C
+       \ /
+        D
+```
+
+A workflow:
+
+1. Validates the task graph
+2. Determines ready tasks
+3. Dispatches executable tasks
+4. Tracks task state
+5. Waits for results
+6. Reevaluates dependencies
+7. Starts newly-ready tasks
+8. Handles failures and blocking
+
+```text
+Workflow
+   ↓
+Tasks
+   ↓
+Dependencies
+   ↓
+Coordinator
+   ↓
+Execution / Tools / Agents
+   ↓
+Results
+   ↓
+Next Ready Tasks
+```
+
+This provides deterministic coordination around the probabilistic reasoning of LLMs.
+
+---
+
+# 📡 Event-Driven Architecture
+
+Genesis uses a typed **EventBus** as a communication backbone.
+
+Examples:
+
+```text
+agent.created
+agent.started
+agent.completed
+
+tool.started
+tool.completed
+tool.failed
+
+memory.created
+memory.updated
+memory.deleted
+memory.retrieved
+
+workflow.created
+workflow.started
+workflow.completed
+workflow.failed
+
+execution.started
+execution.completed
+
+llm.requested
+llm.completed
+llm.failed
+```
+
+The EventBus keeps subsystems decoupled while providing a unified runtime activity stream.
+
+---
+
+# ⚡ Realtime Communication
+
+Genesis exposes runtime activity through WebSockets.
+
+```text
+Runtime Component
+       ↓
+    EventBus
+       ↓
+ WebSocket Manager
+       ↓
+ /ws/events
+       ↓
+ Next.js Frontend
+```
+
+The frontend follows:
+
+```text
+REST
+ ↓
+Initial State
+
+WebSocket
+ ↓
+Incremental Updates
+```
+
+---
+
+# 📊 Observability
+
+Genesis includes a dedicated observability layer for understanding what the platform is doing.
+
+### Includes
+
+- Structured logging
+- Event history
+- Error logs
+- Heartbeat monitoring
+- System health
+- Runtime metrics
+- Live event streams
+- Realtime notifications
+
+---
+
+# 🏗️ System Architecture
+
+```text
+                           ┌─────────────────┐
+                           │      User       │
+                           └────────┬────────┘
+                                    │
+                                    ▼
+                           ┌─────────────────┐
+                           │      Agent      │
+                           └────────┬────────┘
+                                    │
+                                    ▼
+                           ┌─────────────────┐
+                           │   LLM Runtime   │
+                           │ OpenAI / Gemini │
+                           └────────┬────────┘
+                                    │
+                         ┌──────────┴──────────┐
+                         │                     │
+                         ▼                     ▼
+                  ┌─────────────┐       ┌─────────────┐
+                  │   Workflow  │       │    Memory   │
+                  │   Runtime   │       │   Runtime   │
+                  └──────┬──────┘       └─────────────┘
+                         │
+                         ▼
+                  ┌─────────────┐
+                  │  Execution  │
+                  │   Runtime   │
+                  └──────┬──────┘
+                         │
+                  ┌──────┴──────┐
+                  ▼             ▼
+            ┌──────────┐   ┌──────────┐
+            │   Tools  │   │  Agents  │
+            └──────────┘   └──────────┘
+
+                         ┌─────────────┐
+                         │   EventBus  │
+                         └──────┬──────┘
+                                │
+                  ┌─────────────┴─────────────┐
+                  ▼                           ▼
+          ┌──────────────┐             ┌──────────────┐
+          │Observability │             │   Realtime   │
+          └──────────────┘             │  WebSockets  │
+                                       └──────────────┘
+```
+
+---
+
+# 🔄 Agent Execution Flow
+
+The eventual complete Genesis interaction follows:
+
+```text
+User Request
+     ↓
+    Agent
+     ↓
+    LLM
+     ↓
+Reason / Decide
+     ↓
+Workflow / Execution
+     ↓
+ ┌───┼────────────┐
+ ↓   ↓            ↓
+Tool Memory   Other Agent
+ └───┼────────────┘
+     ↓
+   Result
+     ↓
+    LLM
+     ↓
+Final Response
+```
+
+> **LLMs provide reasoning; runtimes provide reliable infrastructure.**
+
+---
+
+# 🛠️ Technology Stack
+
+| Category | Technology |
+|---|---|
+| Programming Language | Python 3.12 |
+| Backend | FastAPI |
+| Architecture | Clean Architecture |
+| Dependency Injection | Service Registry / DI |
+| Frontend | React 19 |
+| Frontend Framework | Next.js 15 |
+| Language | TypeScript |
+| Styling | Tailwind CSS v4 |
+| UI Components | shadcn/ui |
+| Animations | Framer Motion |
+| Realtime | WebSockets |
+| LLM Providers | OpenAI / Google Gemini |
+| Gemini SDK | google-genai |
+| API Documentation | FastAPI / Swagger |
+| Testing | Pytest |
+| Version Control | Git / GitHub |
+
+---
+
+# 📁 Project Structure
+
+```text
+Genesis/
+│
+├── backend/
+│   └── app/
+│       ├── core/
+│       │   ├── agents/
+│       │   ├── api/
+│       │   ├── execution_runtime/
+│       │   ├── llm_runtime/
+│       │   ├── memory_runtime/
+│       │   ├── observability/
+│       │   ├── tool_runtime/
+│       │   ├── workflow_runtime/
+│       │   └── core_services/
+│       └── main.py
+│
+├── frontend/
+│   ├── app/
+│   │   ├── agents/
+│   │   ├── memory/
+│   │   ├── monitoring/
+│   │   ├── tools/
+│   │   ├── workflows/
+│   │   └── page.tsx
+│   ├── components/
+│   ├── hooks/
+│   ├── services/
+│   └── types/
+│
+├── docs/
+│   ├── 16-Tool-Runtime.md
+│   ├── 17-Memory-Runtime.md
+│   ├── 18-Workflow-Runtime.md
+│   ├── 19-LLM-Runtime.md
+│   └── ...
+│
+├── .env.example
+├── pyproject.toml
+└── README.md
+```
+
+---
+
+# 🖥️ Platform Dashboard
+
+Genesis includes dedicated interfaces for inspecting and interacting with the platform.
+
+- 🏠 **Dashboard** — system overview
+- 🤖 **Agents** — agent identity and lifecycle
+- 🔧 **Tools** — discovery and execution
+- 🧠 **Memory** — agent memory management
+- 🔄 **Workflows** — workflow coordination
+- 📊 **Monitoring** — events, logs, health, and realtime activity
+
+---
+
+# 🧪 Verification
+
+Genesis is developed incrementally with automated and manual verification.
+
+Current verified capabilities include:
+
+- Core platform services
+- Observability
+- Realtime WebSockets
+- Agent lifecycle
+- Execution Runtime
+- Tool Runtime
+- Memory Runtime
+- Workflow Runtime
+- LLM Runtime
+- OpenAI/Gemini provider discovery
+- Real Gemini generation through `gemini-3.6-flash`
+
+Latest LLM Runtime verification:
+
+```text
+106 backend tests passed
+compileall passed
+git diff --check passed
+Real Gemini generation → HTTP 200 ✅
+```
+
+Example:
+
+```text
+Input:
+"What is 2 + 2? Reply with only the number."
+
+Gemini:
+"4"
+```
+
+---
+
+# 🚀 Getting Started
+
+## 1. Clone the repository
 
 ```bash
-git clone <repository-url>
-cd genesis
-corepack enable
-pnpm install
-pnpm format:check
+git clone <YOUR_GITHUB_REPOSITORY_URL>
+cd Genesis
 ```
 
-Backend and frontend startup instructions will be added as those components are implemented.
+## 2. Configure the backend
 
-## Development Status
+Create `.env` from `.env.example`.
 
-Genesis is in **v0.1 Foundation** development.
+Example:
 
-| Area | Status |
-| --- | --- |
-| Repository layout | Complete |
-| Root tooling configuration | Complete |
-| Core FastAPI backend | Not yet initialized |
-| Reference application frontend | Not yet initialized |
-| Database, migrations, and runtime | Planned |
+```env
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_TIMEOUT_SECONDS=30
+```
 
-## Documentation Guide
+> Never commit `.env` or API keys to GitHub.
 
-The documentation set is the source of truth for this project.
+## 3. Install backend dependencies
 
-| Start here | Purpose |
-| --- | --- |
-| [Project Context](docs/00-GENESIS_CONTEXT.md) | Core invariants and the Separation Principle |
-| [Vision](docs/01-Vision.md) | Why Genesis exists and what success looks like |
-| [System Architecture](docs/02-System-Architecture.md) | Layers, contracts, and dependency direction |
-| [Technology Stack](docs/03-Tech-Stack.md) | Chosen technologies and rationale |
-| [Folder Structure](docs/04-Folder-Structure.md) | Repository ownership and filesystem rules |
-| [Development Workflow](docs/12-Development-Workflow.md) | Review, testing, and delivery process |
-| [Roadmap](docs/13-Roadmap.md) | Phased evolution from beta to platform |
+```bash
+python -m pip install -e .
+```
 
-## Roadmap
+## 4. Start the backend
 
-1. **v0.1 — Foundation:** establish Core abstractions and validate them with the AI Product Manager reference application.
-2. **v0.2 — Hardening:** strengthen lifecycle guarantees, observability, and approval workflows.
-3. **v0.3 — Ecosystem Enablement:** stabilize contracts and support external applications and plugins.
-4. **v1.0 — Stable Core:** publish backward-compatibility guarantees and a production deployment reference.
+```bash
+python -m uvicorn backend.app.main:app --reload
+```
 
-See the full [roadmap](docs/13-Roadmap.md) for milestones and exit criteria.
+Backend:
 
-## Contributing
+```text
+http://127.0.0.1:8000
+```
 
-Contribution guidance is forthcoming. Until then, contributors should follow the documented architecture, dependency rules, coding standards, and development workflow before proposing changes.
+Swagger:
 
-## License
+```text
+http://127.0.0.1:8000/docs
+```
 
-License terms are forthcoming.
+## 5. Start the frontend
+
+From `frontend`:
+
+```bash
+npm install
+npm run dev
+```
+
+Frontend:
+
+```text
+http://localhost:3000
+```
+
+---
+
+# 📚 Documentation
+
+Detailed subsystem documentation is available in `docs/`.
+
+Current runtime documentation includes:
+
+- Tool Runtime
+- Memory Runtime
+- Workflow Runtime
+- LLM Runtime
+
+---
+
+# 🗺️ Roadmap
+
+### ✅ Completed
+
+- Core Platform
+- Observability
+- Realtime Communication
+- Agent Identity & Lifecycle
+- Execution Runtime Foundation
+- Tool Runtime
+- Memory Runtime
+- Workflow Runtime
+- LLM Runtime Foundation
+- OpenAI Provider
+- Gemini Provider
+
+### 🔜 Planned
+
+- Agent ↔ LLM integration
+- Tool calling through LLM decisions
+- Context assembly
+- Persistent memory providers
+- Vector memory / semantic retrieval
+- RAG
+- Multi-agent coordination
+- Advanced workflow execution
+- Streaming LLM responses
+- Production deployment
+- Authentication and authorization
+- Distributed execution
+- Production-grade persistence
+
+---
+
+# 🧠 Design Philosophy
+
+> **Build the infrastructure around intelligence, not just the intelligence itself.**
+
+An LLM can reason, but it does not by itself provide reliable execution, persistent state, tool management, workflow coordination, lifecycle management, observability, realtime communication, or provider abstraction.
+
+Genesis exists to provide those capabilities.
+
+---
+
+# 📌 Project Status
+
+**Genesis is actively under development.**
+
+The platform foundation is operational. The next major stage is connecting the existing runtimes into a complete intelligent agent execution loop.
+
+```text
+Agents
+  +
+LLMs
+  +
+Tools
+  +
+Memory
+  +
+Execution
+  +
+Workflows
+  +
+Events
+  +
+Observability
+       ↓
+  Intelligent Agents
+```
+
+---
+
+## ⭐ If you find Genesis interesting
+
+Explore the architecture, runtime implementations, documentation, and development history in this repository.
+
+---
+
+# 📜 License
+
+Add your chosen license here.
