@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     )
     DATABASE_URL: str = DEFAULT_DATABASE_URL
     OPENAI_API_KEY: SecretStr | None = None
+    OPENAI_MODEL: str = "gpt-4.1-mini"
+    OPENAI_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)
+    GEMINI_API_KEY: SecretStr | None = None
+    GEMINI_MODEL: str = "gemini-3.6-flash"
+    GEMINI_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)
     ANTHROPIC_API_KEY: SecretStr | None = None
 
 

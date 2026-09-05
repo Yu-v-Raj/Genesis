@@ -37,6 +37,10 @@ from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
 from backend.app.core.tool_runtime.domain.tool import builtin_tools
 from backend.app.core.workflow_engine.application.workflow_engine import WorkflowEngine
 from backend.app.core.workflow_runtime.application.workflow_manager import WorkflowManager
+from backend.app.core.llm_runtime.application.llm_manager import LLMManager
+from backend.app.core.llm_runtime.application.provider_registry import LLMProviderRegistry
+from backend.app.core.llm_runtime.infrastructure.openai_provider import OpenAIProvider
+from backend.app.core.llm_runtime.infrastructure.gemini_provider import GeminiProvider
 
 
 @asynccontextmanager
@@ -66,6 +70,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     memory_manager = MemoryManager(memory_provider, event_bus)
     workflow_engine = WorkflowEngine(event_bus)
     workflow_manager = WorkflowManager(tool_runtime_manager, event_bus)
+    llm_provider_registry = LLMProviderRegistry()
+    llm_provider_registry.register(OpenAIProvider(settings))
+    llm_provider_registry.register(GeminiProvider(settings))
+    llm_manager = LLMManager(llm_provider_registry, event_bus)
     runtime_manager = RuntimeLifecycleManager(service_registry)
     started_at = monotonic()
     logger_service = LoggerService(event_bus)
@@ -97,6 +105,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(InMemoryProvider, memory_provider)
     service_registry.register_singleton(WorkflowEngine, workflow_engine)
     service_registry.register_singleton(WorkflowManager, workflow_manager)
+    service_registry.register_singleton(LLMProviderRegistry, llm_provider_registry)
+    service_registry.register_singleton(LLMManager, llm_manager)
     service_registry.register_singleton(RuntimeLifecycleManager, runtime_manager)
     service_registry.register_singleton(HeartbeatService, heartbeat_service)
     app.state.service_registry = service_registry
@@ -122,6 +132,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "InMemoryProvider",
         "WorkflowEngine",
         "WorkflowManager",
+        "LLMProviderRegistry",
+        "LLMManager",
         "RuntimeLifecycleManager",
         "HeartbeatService",
     ):

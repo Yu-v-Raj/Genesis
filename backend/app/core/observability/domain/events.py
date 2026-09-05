@@ -128,6 +128,27 @@ class MemoryProviderRegistered(Event):
 
     event_type: str = field(init=False, default="memory_provider.registered")
 
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LLMRequested(Event):
+    """Published before an LLM provider receives a normalized request."""
+
+    event_type: str = field(init=False, default="llm.requested")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LLMCompleted(Event):
+    """Published after an LLM provider returns a normalized response."""
+
+    event_type: str = field(init=False, default="llm.completed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LLMFailed(Event):
+    """Published when LLM generation fails without exposing prompts or secrets."""
+
+    event_type: str = field(init=False, default="llm.failed")
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MemoryCreated(Event): event_type: str = field(init=False, default="memory.created")
 @dataclass(frozen=True, slots=True, kw_only=True)

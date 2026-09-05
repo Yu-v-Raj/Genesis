@@ -18,6 +18,7 @@ from backend.app.core.runtime.application.lifecycle_manager import RuntimeLifecy
 from backend.app.core.tool_manager.application.tool_manager import ToolManager
 from backend.app.core.workflow_engine.application.workflow_engine import WorkflowEngine
 from backend.app.core.workflow_runtime.application.workflow_manager import WorkflowManager
+from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 
 
 def get_service_registry(connection: HTTPConnection) -> ServiceRegistry:
@@ -107,3 +108,10 @@ def get_workflow_manager(
 ) -> WorkflowManager:
     """Resolve the app-scoped dependency-aware Workflow Runtime manager."""
     return registry.resolve(WorkflowManager)
+
+
+def get_llm_manager(
+    registry: ServiceRegistry = Depends(get_service_registry),
+) -> LLMManager:
+    """Resolve the app-scoped provider-neutral LLM Runtime manager."""
+    return registry.resolve(LLMManager)
