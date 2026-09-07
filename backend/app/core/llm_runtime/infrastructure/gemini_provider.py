@@ -20,6 +20,8 @@ from backend.app.core.llm_runtime.domain.models import (
     LLMRequest,
     LLMResponse,
     MessageRole,
+    ToolCall,
+    ToolDefinition,
     Usage,
 )
 
@@ -124,7 +126,24 @@ class GeminiProvider(LLMProvider):
             config["max_output_tokens"] = request.generation.max_tokens
         if system_messages:
             config["system_instruction"] = "\n\n".join(system_messages)
+        if request.tools:
+            config["tools"] = [
+                {
+                    "function_declarations": [
+                        GeminiProvider._function_declaration(tool) for tool in request.tools
+                    ]
+                }
+            ]
         return contents, config
+
+    @staticmethod
+    def _function_declaration(tool: ToolDefinition) -> dict[str, object]:
+        """Map a neutral definition to google-genai's function declaration shape."""
+        return {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters_json_schema": dict(tool.parameters),
+        }
 
     @classmethod
     def _normalize_response(cls, response: Any, model: LLMModel) -> LLMResponse:
@@ -133,7 +152,7 @@ class GeminiProvider(LLMProvider):
         finish_reason = None if candidate is None else cls._finish_reason(candidate.finish_reason)
         usage_metadata = response.usage_metadata
         return LLMResponse(
-            content=response.text,
+            content=getattr(response, "text", None),
             model=model,
             finish_reason=finish_reason,
             usage=Usage(
@@ -141,9 +160,39 @@ class GeminiProvider(LLMProvider):
                 output_tokens=cls._token_count(usage_metadata, "candidates_token_count"),
                 total_tokens=cls._token_count(usage_metadata, "total_token_count"),
             ),
-            tool_calls=(),
+            tool_calls=cls._tool_calls(candidate),
             metadata={},
         )
+
+    @staticmethod
+    def _tool_calls(candidate: Any) -> tuple[ToolCall, ...]:
+        """Normalize Gemini function calls without executing them."""
+        if candidate is None:
+            return ()
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or ()
+        calls: list[ToolCall] = []
+        for index, part in enumerate(parts):
+            function_call = getattr(part, "function_call", None)
+            if function_call is None:
+                continue
+            name = getattr(function_call, "name", None)
+            arguments = getattr(function_call, "args", None) or {}
+            if not isinstance(name, str) or not isinstance(arguments, dict):
+                raise ValueError("Gemini function call has invalid fields.")
+            call_id = getattr(function_call, "id", None)
+            calls.append(
+                ToolCall(
+                    call_id=(
+                        call_id
+                        if isinstance(call_id, str) and call_id
+                        else f"gemini-{index}"
+                    ),
+                    name=name,
+                    arguments=arguments,
+                )
+            )
+        return tuple(calls)
 
     @staticmethod
     def _finish_reason(value: Any) -> str | None:

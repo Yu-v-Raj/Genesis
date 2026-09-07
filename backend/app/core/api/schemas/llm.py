@@ -2,7 +2,15 @@
 
 from pydantic import BaseModel, Field
 
-from backend.app.core.llm_runtime.domain.models import GenerationConfig, LLMModel, LLMRequest, LLMResponse, Message, MessageRole, ToolCall, Usage
+from backend.app.core.llm_runtime.domain.models import (
+    GenerationConfig,
+    LLMModel,
+    LLMRequest,
+    LLMResponse,
+    Message,
+    MessageRole,
+    ToolDefinition,
+)
 
 
 class MessageRequest(BaseModel):
@@ -30,14 +38,34 @@ class GenerationRequest(BaseModel):
         return GenerationConfig(temperature=self.temperature, max_tokens=self.max_tokens)
 
 
+class ToolDefinitionRequest(BaseModel):
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    parameters: dict[str, object] = Field(default_factory=dict)
+
+    def to_domain(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters=self.parameters,
+        )
+
+
 class GenerateRequest(BaseModel):
     model: ModelRequest
     messages: list[MessageRequest] = Field(min_length=1)
     generation: GenerationRequest = Field(default_factory=GenerationRequest)
+    tools: list[ToolDefinitionRequest] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
 
     def to_domain(self) -> LLMRequest:
-        return LLMRequest(model=self.model.to_domain(), messages=tuple(message.to_domain() for message in self.messages), generation=self.generation.to_domain(), metadata=self.metadata)
+        return LLMRequest(
+            model=self.model.to_domain(),
+            messages=tuple(message.to_domain() for message in self.messages),
+            generation=self.generation.to_domain(),
+            tools=tuple(tool.to_domain() for tool in self.tools),
+            metadata=self.metadata,
+        )
 
 
 class ModelResponse(BaseModel):

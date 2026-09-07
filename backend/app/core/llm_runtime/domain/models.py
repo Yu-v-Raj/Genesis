@@ -58,16 +58,34 @@ class GenerationConfig:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ToolDefinition:
+    """A provider-neutral capability exposed to an LLM."""
+
+    name: str
+    description: str
+    parameters: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("LLM tool definition name must be non-empty.")
+        if not isinstance(self.description, str) or not self.description.strip():
+            raise ValueError("LLM tool definition description must be non-empty.")
+        object.__setattr__(self, "parameters", _mapping(self.parameters))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LLMRequest:
     model: LLMModel
     messages: tuple[Message, ...]
     generation: GenerationConfig = field(default_factory=GenerationConfig)
+    tools: tuple[ToolDefinition, ...] = ()
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.messages:
             raise ValueError("LLM requests require at least one message.")
         object.__setattr__(self, "messages", tuple(self.messages))
+        object.__setattr__(self, "tools", tuple(self.tools))
         object.__setattr__(self, "metadata", _mapping(self.metadata))
 
 
@@ -92,6 +110,18 @@ class ToolCall:
         if not self.call_id or not self.name:
             raise ValueError("LLM tool calls require an ID and name.")
         object.__setattr__(self, "arguments", _mapping(self.arguments))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ToolResult:
+    """A provider-neutral tool result for a future LLM interaction turn."""
+
+    tool_name: str
+    result: object
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tool_name, str) or not self.tool_name.strip():
+            raise ValueError("LLM tool result name must be non-empty.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

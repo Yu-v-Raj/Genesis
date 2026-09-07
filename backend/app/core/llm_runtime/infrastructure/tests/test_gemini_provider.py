@@ -16,6 +16,7 @@ from backend.app.core.llm_runtime.domain.models import (
     LLMRequest,
     Message,
     MessageRole,
+    ToolDefinition,
 )
 from backend.app.core.llm_runtime.infrastructure.gemini_provider import GeminiProvider
 
@@ -140,6 +141,63 @@ async def test_generation_normalizes_response_usage_and_supported_settings() -> 
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_generation_maps_tools_and_function_calls() -> None:
+    response = SimpleNamespace(
+        text=None,
+        candidates=(
+            SimpleNamespace(
+                finish_reason=SimpleNamespace(value="STOP"),
+                content=SimpleNamespace(
+                    parts=(
+                        SimpleNamespace(
+                            function_call=SimpleNamespace(
+                                id="call-1", name="calculator", args={"expression": "25 * 4"}
+                            )
+                        ),
+                    )
+                ),
+            ),
+        ),
+        usage_metadata=None,
+    )
+    models = FakeModels(response=response)
+    provider = GeminiProvider(configured_settings(), client_factory=lambda *_: FakeClient(models))
+    base_request = gemini_request()
+    request = LLMRequest(
+        model=base_request.model,
+        messages=base_request.messages,
+        generation=base_request.generation,
+        tools=(
+            ToolDefinition(
+                name="calculator",
+                description="Perform arithmetic calculations.",
+                parameters={"type": "object", "properties": {"expression": {"type": "string"}}},
+            ),
+        ),
+    )
+
+    result = await provider.generate(request)
+
+    assert models.calls[0]["config"]["tools"] == [
+        {
+            "function_declarations": [
+                {
+                    "name": "calculator",
+                    "description": "Perform arithmetic calculations.",
+                    "parameters_json_schema": {
+                        "type": "object",
+                        "properties": {"expression": {"type": "string"}},
+                    },
+                }
+            ]
+        }
+    ]
+    assert result.content is None
+    assert result.tool_calls[0].name == "calculator"
+    assert result.tool_calls[0].arguments == {"expression": "25 * 4"}
 
 
 @pytest.mark.asyncio

@@ -34,7 +34,13 @@ class OpenAIProvider(LLMProvider):
             raise LLMConfigurationError("OpenAI support requires the optional 'openai' package.") from error
         try:
             client = AsyncOpenAI(api_key=self._api_key, timeout=self._timeout)
-            completion = await client.chat.completions.create(model=request.model.model_name, messages=[{"role": message.role.value, "content": message.content} for message in request.messages], temperature=request.generation.temperature, max_tokens=request.generation.max_tokens)
+            completion = await client.chat.completions.create(
+                model=request.model.model_name,
+                messages=[{"role": message.role.value, "content": message.content} for message in request.messages],
+                temperature=request.generation.temperature,
+                max_tokens=request.generation.max_tokens,
+                tools=self._tools_payload(request),
+            )
             choice = completion.choices[0]
             usage = completion.usage
             return LLMResponse(content=choice.message.content, model=request.model, finish_reason=choice.finish_reason, usage=Usage(input_tokens=None if usage is None else usage.prompt_tokens, output_tokens=None if usage is None else usage.completion_tokens, total_tokens=None if usage is None else usage.total_tokens), tool_calls=tuple(self._tool_call(item) for item in (choice.message.tool_calls or ())), metadata={})
@@ -46,6 +52,22 @@ class OpenAIProvider(LLMProvider):
             raise
         except Exception as error:
             raise LLMProviderError("OpenAI generation failed.") from error
+
+    @staticmethod
+    def _tools_payload(request: LLMRequest) -> list[dict[str, object]] | None:
+        if not request.tools:
+            return None
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": dict(tool.parameters),
+                },
+            }
+            for tool in request.tools
+        ]
 
     @staticmethod
     def _tool_call(item: Any) -> ToolCall:
