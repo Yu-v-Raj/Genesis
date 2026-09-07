@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext
 from backend.app.core.agent_runtime.domain.status import AgentStatus
+from backend.app.core.api.schemas.llm import GenerateResponse, ModelRequest, ModelResponse
+from backend.app.core.llm_runtime.domain.models import LLMModel, LLMResponse
 
 
 class AgentResponse(BaseModel):
@@ -22,6 +24,7 @@ class AgentResponse(BaseModel):
     updated_at: datetime
     metadata: dict[str, object]
     tags: list[str]
+    llm_model: ModelResponse | None
 
     @classmethod
     def from_agent(cls, agent: Agent) -> "AgentResponse":
@@ -36,6 +39,7 @@ class AgentResponse(BaseModel):
             updated_at=agent.updated_at,
             metadata=dict(agent.metadata),
             tags=list(agent.tags),
+            llm_model=(None if agent.llm_model is None else ModelResponse.from_domain(agent.llm_model)),
         )
 
 
@@ -60,6 +64,10 @@ class AgentCreateRequest(BaseModel):
     type: str = Field(min_length=1)
     metadata: dict[str, object] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
+    llm_model: ModelRequest | None = None
+
+    def llm_model_domain(self) -> LLMModel | None:
+        return None if self.llm_model is None else self.llm_model.to_domain()
 
 
 class AgentMetadataUpdateRequest(BaseModel):
@@ -99,3 +107,16 @@ class AgentContextUpdateRequest(BaseModel):
     current_task: str | None = None
     temporary_variables: dict[str, object] | None = None
     runtime_metadata: dict[str, object] | None = None
+
+
+class AgentChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+
+
+class AgentChatResponse(BaseModel):
+    agent: AgentResponse
+    response: GenerateResponse
+
+    @classmethod
+    def from_domain(cls, agent: Agent, response: LLMResponse) -> "AgentChatResponse":
+        return cls(agent=AgentResponse.from_agent(agent), response=GenerateResponse.from_domain(response))

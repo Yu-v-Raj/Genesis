@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
+from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.context import UNSET
@@ -15,21 +16,38 @@ from backend.app.core.agent_runtime.domain.exceptions import (
     AgentNotFoundError,
     DuplicateAgentError,
 )
-from backend.app.core.api.dependencies.system import get_agent_manager, get_agent_registry
+from backend.app.core.api.dependencies.system import (
+    get_agent_interaction_service,
+    get_agent_manager,
+    get_agent_registry,
+)
 from backend.app.core.api.schemas.agents import (
     AgentContextResponse,
     AgentContextUpdateRequest,
+    AgentChatRequest,
+    AgentChatResponse,
     AgentCountResponse,
     AgentCreateRequest,
     AgentListResponse,
     AgentMetadataUpdateRequest,
     AgentResponse,
 )
+from backend.app.core.llm_runtime.domain.exceptions import (
+    LLMConfigurationError,
+    LLMProviderError,
+    LLMRuntimeError,
+    LLMTimeoutError,
+    ProviderNotFoundError,
+    ProviderUnavailableError,
+)
 
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 AgentRegistryDependency = Annotated[AgentRegistry, Depends(get_agent_registry)]
 AgentManagerDependency = Annotated[AgentManager, Depends(get_agent_manager)]
+AgentInteractionDependency = Annotated[
+    AgentInteractionService, Depends(get_agent_interaction_service)
+]
 
 
 @router.get("", response_model=AgentListResponse)
@@ -50,8 +68,9 @@ async def create_agent(
             name=request.name,
             description=request.description,
             type=request.type,
-            metadata=request.metadata,
-            tags=tuple(request.tags),
+        metadata=request.metadata,
+        tags=tuple(request.tags),
+        llm_model=request.llm_model_domain(),
         )
     except DuplicateAgentError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -151,6 +170,32 @@ async def update_context(
     except AgentNotFoundError as error:
         raise _not_found(error) from error
     return AgentContextResponse.from_context(context)
+
+
+@router.post("/{agent_id}/chat", response_model=AgentChatResponse)
+async def chat(
+    agent_id: UUID,
+    request: AgentChatRequest,
+    interaction: AgentInteractionDependency,
+) -> AgentChatResponse:
+    """Run one initialized Agent turn through the provider-neutral LLM Runtime."""
+    try:
+        agent, response = await interaction.chat(agent_id, request.message)
+        return AgentChatResponse.from_domain(agent, response)
+    except AgentNotFoundError as error:
+        raise _not_found(error) from error
+    except AgentLifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except ProviderNotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except (LLMConfigurationError, ProviderUnavailableError) as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except LLMTimeoutError as error:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(error)) from error
+    except LLMProviderError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+    except (LLMRuntimeError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
 
 
 async def _lifecycle_operation(

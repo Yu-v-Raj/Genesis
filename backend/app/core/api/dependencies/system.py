@@ -8,6 +8,7 @@ from starlette.requests import HTTPConnection
 from backend.app.core.core_services.service_registry import ServiceRegistry
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
+from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.memory.application.memory_manager import MemoryManager
@@ -59,6 +60,13 @@ def get_agent_manager(
 ) -> AgentManager:
     """Resolve the app-scoped Agent Runtime lifecycle manager."""
     return registry.resolve(AgentManager)
+
+
+def get_agent_interaction_service(
+    registry: ServiceRegistry = Depends(get_service_registry),
+) -> AgentInteractionService:
+    """Resolve the app-scoped single-turn Agent interaction service."""
+    return registry.resolve(AgentInteractionService)
 
 
 def get_execution_manager(

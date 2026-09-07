@@ -45,6 +45,7 @@ def test_system_services_returns_registered_core_services(client: TestClient) ->
         "RealtimeGateway",
         "AgentRegistry",
         "AgentManager",
+        "AgentInteractionService",
         "ExecutionHistory",
         "ExecutionExecutor",
         "ExecutionManager",

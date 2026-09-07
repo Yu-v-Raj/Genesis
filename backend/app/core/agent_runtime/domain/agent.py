@@ -7,6 +7,7 @@ from typing import Mapping
 from uuid import UUID, uuid4
 
 from backend.app.core.agent_runtime.domain.status import AgentStatus
+from backend.app.core.llm_runtime.domain.models import LLMModel
 
 
 def _utc_now() -> datetime:
@@ -26,6 +27,7 @@ class Agent:
     updated_at: datetime = field(default_factory=_utc_now)
     metadata: Mapping[str, object] = field(default_factory=dict)
     tags: tuple[str, ...] = ()
+    llm_model: LLMModel | None = None
 
     def __post_init__(self) -> None:
         """Validate and freeze collection values at the domain boundary."""
@@ -44,6 +46,8 @@ class Agent:
             raise ValueError("Agent updated_at cannot precede created_at.")
         if not all(isinstance(tag, str) and tag.strip() for tag in self.tags):
             raise ValueError("Agent tags must contain non-empty strings.")
+        if self.llm_model is not None and not isinstance(self.llm_model, LLMModel):
+            raise TypeError("Agent llm_model must be an LLMModel or None.")
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
         object.__setattr__(self, "tags", tuple(self.tags))
 

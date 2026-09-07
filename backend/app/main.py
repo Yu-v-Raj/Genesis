@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.core.api.router import api_router
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
+from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.core_services.config.settings import settings
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.core_services.service_registry import ServiceRegistry
@@ -74,6 +75,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     llm_provider_registry.register(OpenAIProvider(settings))
     llm_provider_registry.register(GeminiProvider(settings))
     llm_manager = LLMManager(llm_provider_registry, event_bus)
+    agent_interaction_service = AgentInteractionService(
+        agent_registry, agent_manager, llm_manager
+    )
     runtime_manager = RuntimeLifecycleManager(service_registry)
     started_at = monotonic()
     logger_service = LoggerService(event_bus)
@@ -92,6 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(RealtimeGateway, realtime_gateway)
     service_registry.register_singleton(AgentRegistry, agent_registry)
     service_registry.register_singleton(AgentManager, agent_manager)
+    service_registry.register_singleton(AgentInteractionService, agent_interaction_service)
     service_registry.register_singleton(ExecutionHistory, execution_history)
     service_registry.register_singleton(ExecutionExecutor, execution_executor)
     service_registry.register_singleton(ExecutionManager, execution_manager)
@@ -119,6 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "RealtimeGateway",
         "AgentRegistry",
         "AgentManager",
+        "AgentInteractionService",
         "ExecutionHistory",
         "ExecutionExecutor",
         "ExecutionManager",

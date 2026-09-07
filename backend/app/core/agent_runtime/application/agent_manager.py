@@ -9,6 +9,7 @@ from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext, UNSET
 from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError
 from backend.app.core.agent_runtime.domain.status import AgentStatus
+from backend.app.core.llm_runtime.domain.models import LLMModel
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.observability.domain.events import (
     AgentCompleted,
@@ -60,6 +61,7 @@ class AgentManager:
         agent_id: UUID | None = None,
         metadata: Mapping[str, object] | None = None,
         tags: tuple[str, ...] = (),
+        llm_model: LLMModel | None = None,
     ) -> Agent:
         """Create an Agent record and its ephemeral runtime context."""
         agent = Agent(
@@ -69,6 +71,7 @@ class AgentManager:
             **({} if agent_id is None else {"id": agent_id}),
             metadata={} if metadata is None else metadata,
             tags=tags,
+            llm_model=llm_model,
         )
         async with self._lock:
             await self._registry.register(agent)
