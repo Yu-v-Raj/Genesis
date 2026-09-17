@@ -16,6 +16,7 @@ from backend.app.core.llm_runtime.domain.models import (
     LLMRequest,
     Message,
     MessageRole,
+    ToolCall,
     ToolDefinition,
 )
 from backend.app.core.llm_runtime.infrastructure.gemini_provider import GeminiProvider
@@ -155,7 +156,8 @@ async def test_generation_maps_tools_and_function_calls() -> None:
                         SimpleNamespace(
                             function_call=SimpleNamespace(
                                 id="call-1", name="calculator", args={"expression": "25 * 4"}
-                            )
+                            ),
+                            thought_signature=b"signed",
                         ),
                     )
                 ),
@@ -198,6 +200,62 @@ async def test_generation_maps_tools_and_function_calls() -> None:
     assert result.content is None
     assert result.tool_calls[0].name == "calculator"
     assert result.tool_calls[0].arguments == {"expression": "25 * 4"}
+    assert result.tool_calls[0].metadata == {"thought_signature": b"signed"}
+
+
+def test_request_payload_maps_tool_call_and_result_conversation() -> None:
+    request = LLMRequest(
+        model=LLMModel(provider="gemini", model_name="gemini-3.6-flash"),
+        messages=(
+            Message(role=MessageRole.USER, content="What is 25 * 4?"),
+            Message(
+                role=MessageRole.ASSISTANT,
+                content="",
+                metadata={
+                    "tool_calls": (
+                        ToolCall(
+                            call_id="call-1",
+                            name="calculator",
+                            arguments={"expression": "25 * 4"},
+                            metadata={"thought_signature": b"signed"},
+                        ),
+                    )
+                },
+            ),
+            Message(
+                role=MessageRole.TOOL,
+                content='{"success": true, "result": 100}',
+                metadata={"tool_call_id": "call-1", "tool_name": "calculator"},
+            ),
+        ),
+    )
+
+    contents, _ = GeminiProvider._request_payload(request)
+
+    assert contents[1] == {
+        "role": "model",
+        "parts": [
+            {
+                "function_call": {
+                    "id": "call-1",
+                    "name": "calculator",
+                    "args": {"expression": "25 * 4"},
+                },
+                "thought_signature": b"signed",
+            }
+        ],
+    }
+    assert contents[2] == {
+        "role": "user",
+        "parts": [
+            {
+                "function_response": {
+                    "name": "calculator",
+                    "response": {"success": True, "result": 100},
+                }
+            }
+        ],
+    }
 
 
 @pytest.mark.asyncio

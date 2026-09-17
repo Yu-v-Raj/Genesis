@@ -18,6 +18,9 @@ class ToolMetadata:
     capabilities: tuple[ToolCapability, ...] = ()
     permissions: tuple[ToolPermission, ...] = (ToolPermission.NONE,)
     enabled: bool = True
+    parameters: Mapping[str, object] = field(
+        default_factory=lambda: {"type": "object", "properties": {}}
+    )
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -29,4 +32,5 @@ class ToolMetadata:
             raise ValueError("Tool version must be a non-empty string.")
         object.__setattr__(self, "capabilities", tuple(self.capabilities))
         object.__setattr__(self, "permissions", tuple(self.permissions))
+        object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))

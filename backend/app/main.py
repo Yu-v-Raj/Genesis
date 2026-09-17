@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     llm_provider_registry.register(GeminiProvider(settings))
     llm_manager = LLMManager(llm_provider_registry, event_bus)
     agent_interaction_service = AgentInteractionService(
-        agent_registry, agent_manager, llm_manager
+        agent_registry, agent_manager, llm_manager, tool_manager=tool_runtime_manager
     )
     runtime_manager = RuntimeLifecycleManager(service_registry)
     started_at = monotonic()

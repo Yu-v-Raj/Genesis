@@ -7,7 +7,14 @@ from typing import Any
 from backend.app.core.core_services.config.settings import Settings
 from backend.app.core.llm_runtime.application.provider import LLMProvider
 from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError, LLMProviderError, LLMResponseNormalizationError, LLMTimeoutError
-from backend.app.core.llm_runtime.domain.models import LLMModel, LLMRequest, LLMResponse, ToolCall, Usage
+from backend.app.core.llm_runtime.domain.models import (
+    LLMModel,
+    LLMRequest,
+    LLMResponse,
+    MessageRole,
+    ToolCall,
+    Usage,
+)
 
 
 class OpenAIProvider(LLMProvider):
@@ -36,7 +43,7 @@ class OpenAIProvider(LLMProvider):
             client = AsyncOpenAI(api_key=self._api_key, timeout=self._timeout)
             completion = await client.chat.completions.create(
                 model=request.model.model_name,
-                messages=[{"role": message.role.value, "content": message.content} for message in request.messages],
+                messages=self._messages_payload(request),
                 temperature=request.generation.temperature,
                 max_tokens=request.generation.max_tokens,
                 tools=self._tools_payload(request),
@@ -52,6 +59,48 @@ class OpenAIProvider(LLMProvider):
             raise
         except Exception as error:
             raise LLMProviderError("OpenAI generation failed.") from error
+
+    @staticmethod
+    def _messages_payload(request: LLMRequest) -> list[dict[str, object]]:
+        messages: list[dict[str, object]] = []
+        for message in request.messages:
+            if message.role is MessageRole.ASSISTANT and message.metadata.get("tool_calls"):
+                tool_calls = []
+                for tool_call in message.metadata["tool_calls"]:
+                    if not isinstance(tool_call, ToolCall):
+                        raise ValueError("Assistant tool-call metadata is invalid.")
+                    tool_calls.append(
+                        {
+                            "id": tool_call.call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_call.name,
+                                "arguments": json.dumps(dict(tool_call.arguments)),
+                            },
+                        }
+                    )
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.content or None,
+                        "tool_calls": tool_calls,
+                    }
+                )
+                continue
+            if message.role is MessageRole.TOOL and "tool_call_id" in message.metadata:
+                call_id = message.metadata.get("tool_call_id")
+                if not isinstance(call_id, str) or not call_id:
+                    raise ValueError("Tool result metadata requires a tool-call ID.")
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": message.content,
+                        "tool_call_id": call_id,
+                    }
+                )
+                continue
+            messages.append({"role": message.role.value, "content": message.content})
+        return messages
 
     @staticmethod
     def _tools_payload(request: LLMRequest) -> list[dict[str, object]] | None:

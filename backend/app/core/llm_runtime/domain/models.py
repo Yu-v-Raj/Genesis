@@ -105,11 +105,13 @@ class ToolCall:
     call_id: str
     name: str
     arguments: Mapping[str, object] = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.call_id or not self.name:
             raise ValueError("LLM tool calls require an ID and name.")
         object.__setattr__(self, "arguments", _mapping(self.arguments))
+        object.__setattr__(self, "metadata", _mapping(self.metadata))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

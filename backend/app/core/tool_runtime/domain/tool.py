@@ -122,9 +122,69 @@ def builtin_tools() -> tuple[Tool, ...]:
     """Return the deterministic built-in Tool definitions registered at startup."""
     permission = (ToolPermission.NONE,)
     return (
-        Tool(definition=ToolMetadata(name="echo", description="Return a supplied message.", capabilities=(ToolCapability.ECHO,), permissions=permission), handler=_echo),
-        Tool(definition=ToolMetadata(name="calculator", description="Evaluate safe arithmetic.", capabilities=(ToolCapability.CALCULATION,), permissions=permission), handler=_calculator),
-        Tool(definition=ToolMetadata(name="uuid", description="Generate a random UUID.", capabilities=(ToolCapability.IDENTIFIER_GENERATION,), permissions=permission), handler=_uuid),
-        Tool(definition=ToolMetadata(name="random_number", description="Generate an integer in an inclusive range.", capabilities=(ToolCapability.RANDOM_NUMBER,), permissions=permission), handler=_random_number),
-        Tool(definition=ToolMetadata(name="delay", description="Wait for a bounded duration.", capabilities=(ToolCapability.DELAY,), permissions=permission), handler=_delay),
+        Tool(
+            definition=ToolMetadata(
+                name="echo",
+                description="Return a supplied message.",
+                capabilities=(ToolCapability.ECHO,),
+                permissions=permission,
+                parameters={
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                },
+            ),
+            handler=_echo,
+        ),
+        Tool(
+            definition=ToolMetadata(
+                name="calculator",
+                description="Evaluate safe arithmetic.",
+                capabilities=(ToolCapability.CALCULATION,),
+                permissions=permission,
+                parameters={
+                    "type": "object",
+                    "properties": {"expression": {"type": "string"}},
+                    "required": ["expression"],
+                },
+            ),
+            handler=_calculator,
+        ),
+        Tool(
+            definition=ToolMetadata(
+                name="uuid",
+                description="Generate a random UUID.",
+                capabilities=(ToolCapability.IDENTIFIER_GENERATION,),
+                permissions=permission,
+            ),
+            handler=_uuid,
+        ),
+        Tool(
+            definition=ToolMetadata(
+                name="random_number",
+                description="Generate an integer in an inclusive range.",
+                capabilities=(ToolCapability.RANDOM_NUMBER,),
+                permissions=permission,
+                parameters={
+                    "type": "object",
+                    "properties": {"min": {"type": "integer"}, "max": {"type": "integer"}},
+                    "required": ["min", "max"],
+                },
+            ),
+            handler=_random_number,
+        ),
+        Tool(
+            definition=ToolMetadata(
+                name="delay",
+                description="Wait for a bounded duration.",
+                capabilities=(ToolCapability.DELAY,),
+                permissions=permission,
+                parameters={
+                    "type": "object",
+                    "properties": {"seconds": {"type": "number", "minimum": 0, "maximum": 60}},
+                    "required": ["seconds"],
+                },
+            ),
+            handler=_delay,
+        ),
     )

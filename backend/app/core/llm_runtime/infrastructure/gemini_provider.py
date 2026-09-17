@@ -1,6 +1,7 @@
 """Native Google Gemini SDK adapter for the provider-neutral LLM Runtime."""
 
 import asyncio
+import json
 import re
 from collections.abc import Callable
 from time import monotonic
@@ -116,6 +117,48 @@ class GeminiProvider(LLMProvider):
             if message.role is MessageRole.SYSTEM:
                 system_messages.append(message.content)
                 continue
+            if message.role is MessageRole.ASSISTANT and message.metadata.get("tool_calls"):
+                parts: list[dict[str, object]] = []
+                if message.content:
+                    parts.append({"text": message.content})
+                for tool_call in message.metadata["tool_calls"]:
+                    if not isinstance(tool_call, ToolCall):
+                        raise ValueError("Assistant tool-call metadata is invalid.")
+                    part: dict[str, object] = {
+                        "function_call": {
+                            "id": tool_call.call_id,
+                            "name": tool_call.name,
+                            "args": dict(tool_call.arguments),
+                        }
+                    }
+                    thought_signature = tool_call.metadata.get("thought_signature")
+                    if isinstance(thought_signature, bytes):
+                        part["thought_signature"] = thought_signature
+                    parts.append(part)
+                contents.append({"role": "model", "parts": parts})
+                continue
+            if message.role is MessageRole.TOOL and "tool_name" in message.metadata:
+                tool_name = message.metadata.get("tool_name")
+                if not isinstance(tool_name, str) or not tool_name:
+                    raise ValueError("Tool result metadata requires a tool name.")
+                try:
+                    result = json.loads(message.content)
+                except json.JSONDecodeError:
+                    result = {"result": message.content}
+                contents.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "function_response": {
+                                    "name": tool_name,
+                                    "response": result,
+                                }
+                            }
+                        ],
+                    }
+                )
+                continue
             role = "model" if message.role is MessageRole.ASSISTANT else "user"
             contents.append({"role": role, "parts": [{"text": message.content}]})
 
@@ -181,6 +224,7 @@ class GeminiProvider(LLMProvider):
             if not isinstance(name, str) or not isinstance(arguments, dict):
                 raise ValueError("Gemini function call has invalid fields.")
             call_id = getattr(function_call, "id", None)
+            thought_signature = getattr(part, "thought_signature", None)
             calls.append(
                 ToolCall(
                     call_id=(
@@ -190,6 +234,11 @@ class GeminiProvider(LLMProvider):
                     ),
                     name=name,
                     arguments=arguments,
+                    metadata=(
+                        {"thought_signature": thought_signature}
+                        if isinstance(thought_signature, bytes)
+                        else {}
+                    ),
                 )
             )
         return tuple(calls)
