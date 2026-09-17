@@ -71,6 +71,7 @@ async def create_agent(
         metadata=request.metadata,
         tags=tuple(request.tags),
         llm_model=request.llm_model_domain(),
+        allowed_tools=(None if request.allowed_tools is None else tuple(request.allowed_tools)),
         )
     except DuplicateAgentError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error

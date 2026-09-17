@@ -25,6 +25,7 @@ class AgentResponse(BaseModel):
     metadata: dict[str, object]
     tags: list[str]
     llm_model: ModelResponse | None
+    allowed_tools: list[str]
 
     @classmethod
     def from_agent(cls, agent: Agent) -> "AgentResponse":
@@ -40,6 +41,7 @@ class AgentResponse(BaseModel):
             metadata=dict(agent.metadata),
             tags=list(agent.tags),
             llm_model=(None if agent.llm_model is None else ModelResponse.from_domain(agent.llm_model)),
+            allowed_tools=list(agent.allowed_tools),
         )
 
 
@@ -65,6 +67,7 @@ class AgentCreateRequest(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
     llm_model: ModelRequest | None = None
+    allowed_tools: list[str] | None = None
 
     def llm_model_domain(self) -> LLMModel | None:
         return None if self.llm_model is None else self.llm_model.to_domain()

@@ -6,6 +6,7 @@ from uuid import UUID
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.context_assembler import AgentContextAssembler
+from backend.app.core.agent_runtime.application.tool_safety_gate import ToolSafetyGate
 from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError
@@ -52,7 +53,7 @@ class AgentInteractionService:
             raise LLMConfigurationError("Agent has no configured LLM model.")
         context = await self._agent_manager.get_context(agent_id)
         messages = list(self._context_assembler.assemble(agent, context, message))
-        tools = self._tool_definitions()
+        tools = self._tool_definitions(agent)
         await self._agent_manager.start_agent(agent_id)
         try:
             for _ in range(self._max_tool_iterations):
@@ -67,7 +68,7 @@ class AgentInteractionService:
                     return await self._agent_manager.complete_agent(agent_id), response
                 messages.append(self._assistant_tool_call_message(response))
                 for tool_call in response.tool_calls:
-                    messages.append(await self._tool_result_message(tool_call))
+                    messages.append(await self._tool_result_message(agent, tool_call))
         except Exception:
             await self._agent_manager.fail_agent(agent_id)
             raise
@@ -82,7 +83,7 @@ class AgentInteractionService:
             ),
         )
 
-    def _tool_definitions(self) -> tuple[ToolDefinition, ...]:
+    def _tool_definitions(self, agent: Agent) -> tuple[ToolDefinition, ...]:
         if self._tool_manager is None:
             return ()
         return tuple(
@@ -92,6 +93,7 @@ class AgentInteractionService:
                 parameters=tool.definition.parameters,
             )
             for tool in self._tool_manager.list_tools()
+            if tool.name in agent.allowed_tools
         )
 
     @staticmethod
@@ -102,34 +104,45 @@ class AgentInteractionService:
             metadata={"tool_calls": response.tool_calls},
         )
 
-    async def _tool_result_message(self, tool_call: ToolCall) -> Message:
+    async def _tool_result_message(self, agent: Agent, tool_call: ToolCall) -> Message:
         if self._tool_manager is None:
             result = ToolResult(
                 tool_name=tool_call.name,
                 result={"success": False, "error": "Tool runtime is unavailable."},
             )
         else:
-            try:
-                task = await self._tool_manager.execute(
+            _, rejection = ToolSafetyGate(self._tool_manager).validate(
+                tool_name=tool_call.name,
+                arguments=tool_call.arguments,
+                allowed_tools=agent.allowed_tools,
+            )
+            if rejection is not None:
+                result = ToolResult(
                     tool_name=tool_call.name,
-                    arguments=tool_call.arguments,
+                    result={"success": False, "error": rejection},
                 )
-                execution_result = task.result
-                if execution_result is None or execution_result.status is not ToolResultStatus.COMPLETED:
+            else:
+                try:
+                    task = await self._tool_manager.execute(
+                        tool_name=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
+                    execution_result = task.result
+                    if execution_result is None or execution_result.status is not ToolResultStatus.COMPLETED:
+                        result = ToolResult(
+                            tool_name=tool_call.name,
+                            result={"success": False, "error": "Tool execution failed."},
+                        )
+                    else:
+                        result = ToolResult(
+                            tool_name=tool_call.name,
+                            result={"success": True, "result": execution_result.output},
+                        )
+                except Exception:
                     result = ToolResult(
                         tool_name=tool_call.name,
                         result={"success": False, "error": "Tool execution failed."},
                     )
-                else:
-                    result = ToolResult(
-                        tool_name=tool_call.name,
-                        result={"success": True, "result": execution_result.output},
-                    )
-            except Exception:
-                result = ToolResult(
-                    tool_name=tool_call.name,
-                    result={"success": False, "error": "Tool execution failed."},
-                )
         return Message(
             role=MessageRole.TOOL,
             content=json.dumps(result.result),

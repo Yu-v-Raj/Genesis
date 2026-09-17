@@ -62,6 +62,7 @@ class AgentManager:
         metadata: Mapping[str, object] | None = None,
         tags: tuple[str, ...] = (),
         llm_model: LLMModel | None = None,
+        allowed_tools: tuple[str, ...] | None = None,
     ) -> Agent:
         """Create an Agent record and its ephemeral runtime context."""
         agent = Agent(
@@ -72,6 +73,7 @@ class AgentManager:
             metadata={} if metadata is None else metadata,
             tags=tags,
             llm_model=llm_model,
+            **({} if allowed_tools is None else {"allowed_tools": allowed_tools}),
         )
         async with self._lock:
             await self._registry.register(agent)

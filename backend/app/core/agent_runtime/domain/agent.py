@@ -10,6 +10,12 @@ from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.llm_runtime.domain.models import LLMModel
 
 
+# This fixed allowlist preserves v0.10B's built-in capabilities for agents that
+# predate tool policy while preventing newly registered tools from being exposed
+# automatically.
+DEFAULT_ALLOWED_TOOLS = ("echo", "calculator", "uuid", "random_number", "delay")
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -28,6 +34,7 @@ class Agent:
     metadata: Mapping[str, object] = field(default_factory=dict)
     tags: tuple[str, ...] = ()
     llm_model: LLMModel | None = None
+    allowed_tools: tuple[str, ...] = DEFAULT_ALLOWED_TOOLS
 
     def __post_init__(self) -> None:
         """Validate and freeze collection values at the domain boundary."""
@@ -48,8 +55,11 @@ class Agent:
             raise ValueError("Agent tags must contain non-empty strings.")
         if self.llm_model is not None and not isinstance(self.llm_model, LLMModel):
             raise TypeError("Agent llm_model must be an LLMModel or None.")
+        if not all(isinstance(tool_name, str) and tool_name.strip() for tool_name in self.allowed_tools):
+            raise ValueError("Agent allowed_tools must contain non-empty strings.")
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
         object.__setattr__(self, "tags", tuple(self.tags))
+        object.__setattr__(self, "allowed_tools", tuple(self.allowed_tools))
 
     def with_status(self, status: AgentStatus) -> "Agent":
         """Return a new record with an updated lifecycle status."""

@@ -66,12 +66,15 @@ async def service_with_responses(
     )
 
 
-async def initialized_agent(manager: AgentManager) -> Agent:
+async def initialized_agent(
+    manager: AgentManager, *, allowed_tools: tuple[str, ...] | None = None
+) -> Agent:
     agent = await manager.create_agent(
         name="assistant",
         description="Answers questions.",
         type="chat",
         llm_model=LLMModel(provider="fake", model_name="fake-1"),
+        allowed_tools=allowed_tools,
     )
     await manager.initialize_agent(agent.id)
     return agent
@@ -159,8 +162,64 @@ async def test_unknown_tool_is_returned_as_a_safe_result() -> None:
     assert response.content == "I cannot use that tool."
     assert json.loads(provider.requests[1].messages[2].content) == {
         "success": False,
-        "error": "Tool execution failed.",
+        "error": "Requested tool is unavailable.",
     }
+
+
+@pytest.mark.asyncio
+async def test_agent_advertises_and_executes_only_allowed_tools() -> None:
+    model = LLMModel(provider="fake", model_name="fake-1")
+    manager, service, provider = await service_with_responses(
+        (
+            LLMResponse(
+                content=None,
+                model=model,
+                tool_calls=(
+                    ToolCall(call_id="calculator", name="calculator", arguments={"expression": "3 * 7"}),
+                ),
+            ),
+            LLMResponse(content="21", model=model),
+        )
+    )
+    agent = await initialized_agent(manager, allowed_tools=("calculator",))
+
+    _, response = await service.chat(agent.id, "Calculate")
+
+    assert response.content == "21"
+    assert [tool.name for tool in provider.requests[0].tools] == ["calculator"]
+    assert json.loads(provider.requests[1].messages[2].content) == {"success": True, "result": 21}
+
+
+@pytest.mark.asyncio
+async def test_forbidden_and_invalid_calls_are_rejected_before_execution() -> None:
+    model = LLMModel(provider="fake", model_name="fake-1")
+    manager, service, provider = await service_with_responses(
+        (
+            LLMResponse(
+                content=None,
+                model=model,
+                tool_calls=(
+                    ToolCall(call_id="forbidden", name="echo", arguments={"message": "no"}),
+                    ToolCall(call_id="invalid", name="calculator", arguments={"expression": 4}),
+                    ToolCall(call_id="valid", name="calculator", arguments={"expression": "4 + 5"}),
+                ),
+            ),
+            LLMResponse(content="9", model=model),
+        )
+    )
+    agent = await initialized_agent(manager, allowed_tools=("calculator",))
+
+    _, response = await service.chat(agent.id, "Use tools")
+
+    assert response.content == "9"
+    results = [json.loads(message.content) for message in provider.requests[1].messages[2:]]
+    assert results == [
+        {"success": False, "error": "Requested tool is not allowed."},
+        {"success": False, "error": "Tool arguments are invalid."},
+        {"success": True, "result": 9},
+    ]
+    assert service._tool_manager is not None
+    assert [task.tool_name for task in service._tool_manager.history()] == ["calculator"]
 
 
 @pytest.mark.asyncio

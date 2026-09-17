@@ -62,6 +62,7 @@ def test_agents_api_supports_lifecycle_metadata_and_context_operations(client: T
             "type": "planning",
             "metadata": {"priority": "low"},
             "tags": ["test"],
+            "allowed_tools": ["calculator"],
         },
     )
 
@@ -84,6 +85,7 @@ def test_agents_api_supports_lifecycle_metadata_and_context_operations(client: T
     )
 
     assert metadata.json()["metadata"] == {"priority": "high"}
+    assert created.json()["allowed_tools"] == ["calculator"]
     assert context.json()["current_task"] == "prepare plan"
     assert context.json()["temporary_variables"] == {"attempt": 1}
     assert context.json()["runtime_metadata"] == {"worker": "local"}
