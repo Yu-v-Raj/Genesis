@@ -8,8 +8,9 @@ from backend.app.core.agent_runtime.application.agent_registry import AgentRegis
 from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext, UNSET
 from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError
+from backend.app.core.agent_runtime.domain.session import AgentSession
 from backend.app.core.agent_runtime.domain.status import AgentStatus
-from backend.app.core.llm_runtime.domain.models import LLMModel
+from backend.app.core.llm_runtime.domain.models import LLMModel, Message
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.observability.domain.events import (
     AgentCompleted,
@@ -33,6 +34,7 @@ class AgentManager:
         AgentStatus.INITIALIZING: {AgentStatus.IDLE, AgentStatus.STOPPED},
         AgentStatus.IDLE: {AgentStatus.RUNNING, AgentStatus.STOPPED},
         AgentStatus.RUNNING: {
+            AgentStatus.IDLE,
             AgentStatus.WAITING,
             AgentStatus.PAUSED,
             AgentStatus.COMPLETED,
@@ -50,6 +52,7 @@ class AgentManager:
         self._registry = registry
         self._event_bus = event_bus
         self._contexts: dict[UUID, AgentContext] = {}
+        self._sessions: dict[UUID, AgentSession] = {}
         self._lock = asyncio.Lock()
 
     async def create_agent(
@@ -77,7 +80,11 @@ class AgentManager:
         )
         async with self._lock:
             await self._registry.register(agent)
-            self._contexts[agent.id] = AgentContext(current_state=agent.status)
+            session = AgentSession(agent_id=agent.id)
+            self._sessions[agent.id] = session
+            self._contexts[agent.id] = AgentContext(
+                current_state=agent.status, session_id=session.id
+            )
         await self._event_bus.publish(
             AgentCreated(source="agent_manager", payload={"agent_id": str(agent.id)})
         )
@@ -88,6 +95,7 @@ class AgentManager:
         async with self._lock:
             agent = await self._registry.unregister(agent_id)
             self._contexts.pop(agent_id, None)
+            self._sessions.pop(agent_id, None)
         await self._event_bus.publish(
             AgentDeleted(source="agent_manager", payload={"agent_id": str(agent_id)})
         )
@@ -122,6 +130,10 @@ class AgentManager:
         """Transition a RUNNING Agent to COMPLETED."""
         return await self._transition(agent_id, AgentStatus.COMPLETED, AgentCompleted)
 
+    async def finish_interaction(self, agent_id: UUID) -> Agent:
+        """Return a normally completed or failed interaction to availability."""
+        return await self._transition(agent_id, AgentStatus.IDLE, None)
+
     async def fail_agent(self, agent_id: UUID) -> Agent:
         """Transition a RUNNING Agent to FAILED."""
         return await self._transition(agent_id, AgentStatus.FAILED, AgentFailed)
@@ -140,6 +152,20 @@ class AgentManager:
         async with self._lock:
             self._registry.get(agent_id)
             return self._contexts[agent_id]
+
+    async def get_session(self, agent_id: UUID) -> AgentSession:
+        """Return the Agent's current ephemeral conversation session."""
+        async with self._lock:
+            self._registry.get(agent_id)
+            return self._sessions[agent_id]
+
+    async def append_session_messages(self, agent_id: UUID, *messages: Message) -> AgentSession:
+        """Append provider-neutral conversation messages to an Agent session."""
+        async with self._lock:
+            self._registry.get(agent_id)
+            session = self._sessions[agent_id].with_messages(*messages)
+            self._sessions[agent_id] = session
+            return session
 
     async def update_context(
         self,
@@ -173,18 +199,22 @@ class AgentManager:
         | type[AgentResumed]
         | type[AgentCompleted]
         | type[AgentFailed]
-        | type[AgentStopped],
+        | type[AgentStopped]
+        | None,
     ) -> Agent:
         async with self._lock:
             agent = self._registry.get(agent_id)
             if agent.status is target_state:
+                if target_state is AgentStatus.RUNNING:
+                    raise AgentLifecycleError(agent.id, agent.status.value, target_state.value)
                 return agent
             self._require_transition(agent, target_state)
             updated_agent = await self._registry.update_status(agent_id, target_state)
             self._contexts[agent_id] = self._contexts[agent_id].with_state(target_state)
-        await self._event_bus.publish(
-            event_type(source="agent_manager", payload={"agent_id": str(agent_id)})
-        )
+        if event_type is not None:
+            await self._event_bus.publish(
+                event_type(source="agent_manager", payload={"agent_id": str(agent_id)})
+            )
         return updated_agent
 
     def _require_transition(self, agent: Agent, target_state: AgentStatus) -> None:

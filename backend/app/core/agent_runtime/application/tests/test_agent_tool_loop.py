@@ -103,7 +103,7 @@ async def test_agent_executes_tool_and_feeds_result_back_to_llm() -> None:
 
     completed, response = await service.chat(agent.id, "What is 25 * 4?")
 
-    assert completed.status is AgentStatus.COMPLETED
+    assert completed.status is AgentStatus.IDLE
     assert response.content == "100"
     assert provider.requests[0].tools[1].name == "calculator"
     assert provider.requests[1].messages[1].metadata["tool_calls"][0].name == "calculator"
@@ -237,6 +237,6 @@ async def test_tool_iteration_limit_stops_repeated_tool_calls() -> None:
 
     failed, response = await service.chat(agent.id, "Loop")
 
-    assert failed.status is AgentStatus.FAILED
+    assert failed.status is AgentStatus.IDLE
     assert response.finish_reason == "tool_iteration_limit"
     assert len(provider.requests) == 2

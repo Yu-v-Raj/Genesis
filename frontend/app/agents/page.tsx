@@ -48,8 +48,7 @@ export default function AgentsPage() {
     { label: "Running", value: agents.filter((agent) => agent.status === "running").length, icon: PlayCircle, tone: "text-emerald-300" },
     { label: "Paused", value: agents.filter((agent) => agent.status === "paused").length, icon: PauseCircle, tone: "text-amber-300" },
     { label: "Stopped", value: agents.filter((agent) => agent.status === "stopped").length, icon: CircleStop, tone: "text-slate-300" },
-    { label: "Completed", value: agents.filter((agent) => agent.status === "completed").length, icon: CheckCircle2, tone: "text-emerald-300" },
-    { label: "Failed", value: agents.filter((agent) => agent.status === "failed").length, icon: XCircle, tone: "text-red-300" },
+    { label: "Available", value: agents.filter((agent) => agent.status === "idle").length, icon: CheckCircle2, tone: "text-emerald-300" },
   ];
   const executionSummaries = [
     { label: "Running", value: activeExecutions.length, icon: PlayCircle, tone: "text-amber-300" },

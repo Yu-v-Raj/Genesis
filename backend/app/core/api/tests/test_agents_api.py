@@ -126,7 +126,7 @@ def test_agents_api_chats_through_the_registered_llm_provider(client: TestClient
     response = client.post(f"/api/agents/{agent_id}/chat", json={"message": "Hello"})
 
     assert response.status_code == 200
-    assert response.json()["agent"]["status"] == "completed"
+    assert response.json()["agent"]["status"] == "idle"
     assert response.json()["response"]["content"] == "fake answer"
     assert response.json()["response"]["model"] == {
         "provider": "fake",

@@ -52,9 +52,12 @@ class AgentInteractionService:
         if agent.llm_model is None:
             raise LLMConfigurationError("Agent has no configured LLM model.")
         context = await self._agent_manager.get_context(agent_id)
-        messages = list(self._context_assembler.assemble(agent, context, message))
+        session = await self._agent_manager.get_session(agent_id)
+        current_messages = self._context_assembler.assemble(agent, context, message)
+        messages = [*session.messages, *current_messages]
         tools = self._tool_definitions(agent)
         await self._agent_manager.start_agent(agent_id)
+        await self._agent_manager.append_session_messages(agent_id, *current_messages)
         try:
             for _ in range(self._max_tool_iterations):
                 response = await self._llm_manager.generate(
@@ -65,15 +68,21 @@ class AgentInteractionService:
                     )
                 )
                 if not response.tool_calls:
-                    return await self._agent_manager.complete_agent(agent_id), response
-                messages.append(self._assistant_tool_call_message(response))
+                    assistant_message = self._assistant_tool_call_message(response)
+                    await self._agent_manager.append_session_messages(agent_id, assistant_message)
+                    return await self._agent_manager.finish_interaction(agent_id), response
+                assistant_message = self._assistant_tool_call_message(response)
+                messages.append(assistant_message)
+                await self._agent_manager.append_session_messages(agent_id, assistant_message)
                 for tool_call in response.tool_calls:
-                    messages.append(await self._tool_result_message(agent, tool_call))
+                    tool_message = await self._tool_result_message(agent, tool_call)
+                    messages.append(tool_message)
+                    await self._agent_manager.append_session_messages(agent_id, tool_message)
         except Exception:
-            await self._agent_manager.fail_agent(agent_id)
+            await self._agent_manager.finish_interaction(agent_id)
             raise
         return (
-            await self._agent_manager.fail_agent(agent_id),
+            await self._agent_manager.finish_interaction(agent_id),
             LLMResponse(
                 content="Tool-call iteration limit reached.",
                 model=agent.llm_model,
