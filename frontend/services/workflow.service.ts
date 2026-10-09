@@ -1,7 +1,8 @@
 import { requestJson } from "@/services/api-client";
-import type { Workflow, WorkflowCreateRequest, WorkflowListResponse, WorkflowTaskListResponse } from "@/types/workflows";
+import type { Workflow, WorkflowCreateRequest, WorkflowDefinitionListResponse, WorkflowListResponse, WorkflowTaskListResponse } from "@/types/workflows";
 
 const WORKFLOW_API_BASE_URL = process.env.NEXT_PUBLIC_WORKFLOW_API_BASE_URL ?? "http://127.0.0.1:8000/api/workflows";
+const DEFINITION_API_BASE_URL = process.env.NEXT_PUBLIC_WORKFLOW_DEFINITION_API_BASE_URL ?? WORKFLOW_API_BASE_URL.replace(/\/workflows$/, "/workflow-definitions");
 
 export class WorkflowApiError extends Error {
   readonly status?: number;
@@ -24,4 +25,8 @@ export const WorkflowService = Object.freeze({
   cancel: (workflowId: string): Promise<Workflow> => request(`/${encodeURIComponent(workflowId)}/cancel`, { method: "POST" }),
   tasks: (workflowId: string): Promise<WorkflowTaskListResponse> => request(`/${encodeURIComponent(workflowId)}/tasks`),
   history: (workflowId: string): Promise<WorkflowTaskListResponse> => request(`/${encodeURIComponent(workflowId)}/history`),
+  /** Re-run unfinished steps; the server refuses (409) unless allowed and acknowledged where required. */
+  retry: (workflowId: string, acknowledgeSideEffects = false): Promise<Workflow> => request(`/${encodeURIComponent(workflowId)}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ acknowledge_side_effects: acknowledgeSideEffects }) }),
+  definitions: (): Promise<WorkflowDefinitionListResponse> => requestJson(DEFINITION_API_BASE_URL, "", {}, "Unable to connect to the Genesis Workflow Runtime API.", (message, status) => new WorkflowApiError(message, status)),
+  runDefinition: (definitionId: string): Promise<Workflow> => requestJson(DEFINITION_API_BASE_URL, `/${encodeURIComponent(definitionId)}/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ start: true }) }, "Unable to connect to the Genesis Workflow Runtime API.", (message, status) => new WorkflowApiError(message, status)),
 });

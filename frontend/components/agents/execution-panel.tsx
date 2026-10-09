@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   CheckCircle2,
-  ChevronRight,
   CircleAlert,
   Clock3,
   LoaderCircle,
@@ -16,7 +15,7 @@ import type { Execution, ExecutionStatus } from "@/types/executions";
 import type { RealtimeEvent } from "@/types/realtime";
 
 const lifecycle: ExecutionStatus[] = ["queued", "starting", "running", "completed"];
-const terminalStatuses = new Set<ExecutionStatus>(["completed", "failed", "cancelled"]);
+const terminalStatuses = new Set<ExecutionStatus>(["completed", "failed", "cancelled", "interrupted"]);
 
 const statusClasses: Record<ExecutionStatus, string> = {
   pending: "border-slate-400/25 bg-slate-400/10 text-slate-200",
@@ -26,6 +25,7 @@ const statusClasses: Record<ExecutionStatus, string> = {
   completed: "border-emerald-400/25 bg-emerald-400/10 text-emerald-200",
   failed: "border-red-400/25 bg-red-400/10 text-red-200",
   cancelled: "border-slate-400/25 bg-slate-400/10 text-slate-300",
+  interrupted: "border-orange-400/30 bg-orange-400/10 text-orange-200",
 };
 
 export function executionStatusClass(status: ExecutionStatus): string {
@@ -70,12 +70,6 @@ export function ExecutionPanel({ agentName, executions, events }: ExecutionPanel
     () => executions.find((execution) => execution.execution_id === selectedId) ?? executions[0] ?? null,
     [executions, selectedId]
   );
-
-  useEffect(() => {
-    if (selectedId !== null && !executions.some((execution) => execution.execution_id === selectedId)) {
-      setSelectedId(null);
-    }
-  }, [executions, selectedId]);
 
   if (executions.length === 0) {
     return <p className="rounded-lg border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">No executions have been recorded for this agent.</p>;
@@ -128,7 +122,7 @@ function ExecutionDetail({ execution, events }: { execution: Execution; events: 
     return () => window.clearInterval(interval);
   }, [active]);
   const duration = currentDuration(execution, now);
-  const states: ExecutionStatus[] = execution.status === "failed" ? [...lifecycle.slice(0, 3), "failed"] : execution.status === "cancelled" ? [...lifecycle.slice(0, 3), "cancelled"] : lifecycle;
+  const states: ExecutionStatus[] = ["failed", "cancelled", "interrupted"].includes(execution.status) ? [...lifecycle.slice(0, 3), execution.status] : lifecycle;
 
   return <section className="rounded-xl border border-border bg-white/[0.02] p-4 sm:p-5">
     <div className="flex flex-wrap items-center justify-between gap-2">

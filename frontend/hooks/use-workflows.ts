@@ -6,7 +6,7 @@ import { WorkflowApiError, WorkflowService } from "@/services/workflow.service";
 import type { Workflow, WorkflowCreateRequest, WorkflowHistoryItem, WorkflowTask } from "@/types/workflows";
 import type { RealtimeEvent } from "@/types/realtime";
 
-const WORKFLOW_EVENTS = new Set(["workflow.created", "workflow.queued", "workflow.started", "workflow.paused", "workflow.resumed", "workflow.completed", "workflow.failed", "workflow.cancelled", "workflow.task.ready", "workflow.task.started", "workflow.task.completed", "workflow.task.failed"]);
+const WORKFLOW_EVENTS = new Set(["workflow.created", "workflow.queued", "workflow.started", "workflow.paused", "workflow.resumed", "workflow.completed", "workflow.failed", "workflow.cancelled", "workflow.task.ready", "workflow.task.started", "workflow.task.completed", "workflow.task.failed", "workflow.task.interrupted", "workflow.interrupted", "workflow.recovered", "workflow.retried"]);
 const workflowIdFromEvent = (event: RealtimeEvent) => typeof event.payload.workflow_id === "string" ? event.payload.workflow_id : null;
 const message = (error: unknown) => error instanceof WorkflowApiError ? error.message : "The Workflow Runtime request could not be completed.";
 const upsert = (workflows: Workflow[], workflow: Workflow) => [workflow, ...workflows.filter((item) => item.workflow_id !== workflow.workflow_id)];
