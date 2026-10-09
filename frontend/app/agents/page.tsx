@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Bot, CheckCircle2, CircleStop, Clock3, Gauge, PauseCircle, PlayCircle, Plus, TimerReset, XCircle } from "lucide-react";
 
 import { AgentCard } from "@/components/agents/agent-card";
+import { AgentConversation } from "@/components/agents/agent-conversation";
 import { AgentListSkeleton } from "@/components/agents/agent-list-skeleton";
 import { CreateAgentDialog } from "@/components/agents/create-agent-dialog";
 import { ErrorState } from "@/components/dashboard/error-state";
@@ -12,12 +13,14 @@ import { RealtimeStatus } from "@/components/dashboard/realtime-status";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { useAgents } from "@/hooks/use-agents";
+import { useAgentConversation } from "@/hooks/use-agent-conversation";
 import { useExecutions } from "@/hooks/use-executions";
 import { useRealtime } from "@/hooks/use-realtime";
 
 export default function AgentsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const realtime = useRealtime();
   const {
     agents,
@@ -32,6 +35,8 @@ export default function AgentsPage() {
     loadContext,
     retry,
   } = useAgents(realtime);
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null;
+  const conversation = useAgentConversation(selectedAgent?.id ?? null);
   const executionState = useExecutions(realtime);
   const combinedError = error ?? executionState.error;
   const initialLoading = loading || executionState.loading;
@@ -123,6 +128,8 @@ export default function AgentsPage() {
                 ))}
               </section></>
             )}
+
+            {!initialLoading && agents.length > 0 && <section className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]"><label className="rounded-xl border border-border bg-surface p-4 text-sm font-medium text-foreground">Chat with<select value={selectedAgent?.id ?? ""} onChange={(event) => setSelectedAgentId(event.target.value)} className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"><option value="" disabled>Select an Agent</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label><AgentConversation key={selectedAgent?.id} agent={selectedAgent} messages={conversation.messages} pending={conversation.pending} error={conversation.error} onSend={conversation.send} /></section>}
 
             {combinedError && !initialLoading && agents.length === 0 ? (
               <ErrorState message={combinedError} onRetry={() => void Promise.all([retry(), executionState.retry()])} />

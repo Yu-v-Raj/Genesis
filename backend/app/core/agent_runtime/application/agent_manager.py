@@ -9,6 +9,7 @@ from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext, UNSET
 from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError
 from backend.app.core.agent_runtime.domain.session import AgentSession
+from backend.app.core.observability.domain.events import ToolRejected
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.llm_runtime.domain.models import LLMModel, Message
 from backend.app.core.core_services.event_bus import EventBus
@@ -114,9 +115,9 @@ class AgentManager:
         )
         return initialized_agent
 
-    async def start_agent(self, agent_id: UUID) -> Agent:
+    async def start_agent(self, agent_id: UUID, *, interaction_id: UUID | None = None) -> Agent:
         """Transition an IDLE Agent to RUNNING."""
-        return await self._transition(agent_id, AgentStatus.RUNNING, AgentStarted)
+        return await self._transition(agent_id, AgentStatus.RUNNING, AgentStarted, interaction_id)
 
     async def pause_agent(self, agent_id: UUID) -> Agent:
         """Transition a RUNNING Agent to PAUSED."""
@@ -130,9 +131,17 @@ class AgentManager:
         """Transition a RUNNING Agent to COMPLETED."""
         return await self._transition(agent_id, AgentStatus.COMPLETED, AgentCompleted)
 
-    async def finish_interaction(self, agent_id: UUID) -> Agent:
+    async def finish_interaction(self, agent_id: UUID, *, interaction_id: UUID | None = None) -> Agent:
         """Return a normally completed or failed interaction to availability."""
-        return await self._transition(agent_id, AgentStatus.IDLE, None)
+        return await self._transition(agent_id, AgentStatus.IDLE, None, interaction_id)
+
+    async def publish_tool_rejected(
+        self, *, agent_id: UUID, interaction_id: UUID, tool_name: str, category: str
+    ) -> None:
+        await self._event_bus.publish(ToolRejected(source="agent_safety_gate", payload={
+            "agent_id": str(agent_id), "interaction_id": str(interaction_id),
+            "tool_name": tool_name, "category": category,
+        }))
 
     async def fail_agent(self, agent_id: UUID) -> Agent:
         """Transition a RUNNING Agent to FAILED."""
@@ -201,6 +210,7 @@ class AgentManager:
         | type[AgentFailed]
         | type[AgentStopped]
         | None,
+        interaction_id: UUID | None = None,
     ) -> Agent:
         async with self._lock:
             agent = self._registry.get(agent_id)
@@ -209,11 +219,16 @@ class AgentManager:
                     raise AgentLifecycleError(agent.id, agent.status.value, target_state.value)
                 return agent
             self._require_transition(agent, target_state)
-            updated_agent = await self._registry.update_status(agent_id, target_state)
+            updated_agent = await self._registry.update_status(
+                agent_id, target_state, interaction_id=interaction_id
+            )
             self._contexts[agent_id] = self._contexts[agent_id].with_state(target_state)
         if event_type is not None:
             await self._event_bus.publish(
-                event_type(source="agent_manager", payload={"agent_id": str(agent_id)})
+                event_type(source="agent_manager", payload={
+                    "agent_id": str(agent_id),
+                    **({} if interaction_id is None else {"interaction_id": str(interaction_id)}),
+                })
             )
         return updated_agent
 

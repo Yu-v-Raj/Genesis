@@ -95,6 +95,13 @@ class ToolFailed(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ToolRejected(Event):
+    """Published when Agent safety rejects an untrusted tool call."""
+
+    event_type: str = field(init=False, default="tool.rejected")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TaskCreated(Event):
     """Published when Tool Runtime creates a task for execution work."""
 

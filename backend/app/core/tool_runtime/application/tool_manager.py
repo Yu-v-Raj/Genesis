@@ -100,4 +100,8 @@ class ToolRuntimeManager:
         }
         if task.execution_id is not None:
             payload["execution_id"] = str(task.execution_id)
+        for key in ("agent_id", "interaction_id"):
+            value = task.metadata.get(key)
+            if isinstance(value, str):
+                payload[key] = value
         await self._event_bus.publish(event_type(source="tool_manager", payload=payload))

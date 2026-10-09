@@ -3,6 +3,8 @@ import type {
   AgentContext,
   AgentListResponse,
   CreateAgentInput,
+  AgentChatResponse,
+  AgentSession,
 } from "@/types/agents";
 import { requestJson } from "@/services/api-client";
 
@@ -50,4 +52,8 @@ export const AgentService = Object.freeze({
   resume: (agentId: string): Promise<Agent> => lifecycle(agentId, "resume"),
   stop: (agentId: string): Promise<Agent> => lifecycle(agentId, "stop"),
   getContext: (agentId: string): Promise<AgentContext> => request<AgentContext>(`/${agentId}/context`),
+  getSession: (agentId: string): Promise<AgentSession> => request<AgentSession>(`/${agentId}/session`),
+  chat: (agentId: string, message: string): Promise<AgentChatResponse> => request<AgentChatResponse>(`/${agentId}/chat`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }),
+  }),
 });

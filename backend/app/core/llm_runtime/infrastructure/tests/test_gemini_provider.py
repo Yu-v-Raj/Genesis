@@ -250,12 +250,48 @@ def test_request_payload_maps_tool_call_and_result_conversation() -> None:
         "parts": [
             {
                 "function_response": {
+                    "id": "call-1",
                     "name": "calculator",
                     "response": {"success": True, "result": 100},
                 }
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_function_call_response_does_not_use_sdk_text_concatenation() -> None:
+    class FunctionCallResponse:
+        candidates = (
+            SimpleNamespace(
+                finish_reason=SimpleNamespace(value="STOP"),
+                content=SimpleNamespace(parts=(
+                    SimpleNamespace(
+                        function_call=SimpleNamespace(id="call-1", name="calculator", args={"expression": "2 + 2"}),
+                        thought_signature=b"signed",
+                    ),
+                )),
+            ),
+        )
+        usage_metadata = None
+
+        @property
+        def text(self) -> str:
+            raise AssertionError("text must not be read for function calls")
+
+    response = FunctionCallResponse()
+    models = FakeModels(response=response)
+    provider = GeminiProvider(configured_settings(), client_factory=lambda *_: FakeClient(models))
+    request = LLMRequest(
+        model=LLMModel(provider="gemini", model_name="gemini-3.6-flash"),
+        messages=(Message(role=MessageRole.USER, content="Calculate"),),
+        tools=(ToolDefinition(name="calculator", description="Calculate", parameters={"type": "object"}),),
+    )
+
+    result = await provider.generate(request)
+
+    assert result.content is None
+    assert result.tool_calls[0].metadata == {"thought_signature": b"signed"}
 
 
 @pytest.mark.asyncio

@@ -21,18 +21,19 @@ class LLMManager:
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         started = monotonic()
+        correlation = {key: value for key, value in request.metadata.items() if key in {"agent_id", "interaction_id"} and isinstance(value, str)}
         try:
             provider = self._registry.resolve(request.model.provider)
         except Exception as error:
-            await self._publish(LLMFailed, {"provider": request.model.provider, "model": request.model.model_name, "duration_ms": round((monotonic() - started) * 1000), "error_type": type(error).__name__})
+            await self._publish(LLMFailed, {"provider": request.model.provider, "model": request.model.model_name, "duration_ms": round((monotonic() - started) * 1000), "error_type": type(error).__name__, **correlation})
             raise
-        await self._publish(LLMRequested, {"provider": provider.name, "model": request.model.model_name})
+        await self._publish(LLMRequested, {"provider": provider.name, "model": request.model.model_name, **correlation})
         try:
             response = await provider.generate(request)
         except Exception as error:
-            await self._publish(LLMFailed, {"provider": provider.name, "model": request.model.model_name, "duration_ms": round((monotonic() - started) * 1000), "error_type": type(error).__name__})
+            await self._publish(LLMFailed, {"provider": provider.name, "model": request.model.model_name, "duration_ms": round((monotonic() - started) * 1000), "error_type": type(error).__name__, **correlation})
             raise
-        await self._publish(LLMCompleted, {"provider": provider.name, "model": response.model.model_name, "duration_ms": round((monotonic() - started) * 1000), "usage": {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens, "total_tokens": response.usage.total_tokens}})
+        await self._publish(LLMCompleted, {"provider": provider.name, "model": response.model.model_name, "duration_ms": round((monotonic() - started) * 1000), "usage": {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens, "total_tokens": response.usage.total_tokens}, **correlation})
         return response
 
     async def _publish(self, event_type, payload: dict[str, object]) -> None:

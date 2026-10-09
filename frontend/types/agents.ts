@@ -33,6 +33,24 @@ export interface AgentContext {
   updated_at: string;
 }
 
+export interface ToolActivity {
+  tool_name: string;
+  status: "running" | "completed" | "failed" | "rejected" | string;
+  result: unknown | null;
+  error: string | null;
+  duration: number | null;
+}
+
+export interface AgentChatResponse {
+  agent: Agent;
+  response: { content: string | null };
+  interaction_id: string;
+  tool_activities: ToolActivity[];
+}
+
+export interface SessionMessage { role: "user" | "assistant" | "tool"; content: string; }
+export interface AgentSession { id: string; agent_id: string; messages: SessionMessage[]; }
+
 export interface CreateAgentInput {
   name: string;
   description: string;

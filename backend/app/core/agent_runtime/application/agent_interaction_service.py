@@ -1,13 +1,14 @@
 """Bounded Agent coordination across the LLM and Tool runtimes."""
 
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.context_assembler import AgentContextAssembler
 from backend.app.core.agent_runtime.application.tool_safety_gate import ToolSafetyGate
 from backend.app.core.agent_runtime.domain.agent import Agent
+from backend.app.core.agent_runtime.domain.interaction import InteractionSummary, ToolActivity
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError
 from backend.app.core.llm_runtime.domain.models import (
@@ -47,8 +48,15 @@ class AgentInteractionService:
         self._max_tool_iterations = max_tool_iterations
 
     async def chat(self, agent_id: UUID, message: str) -> tuple[Agent, LLMResponse]:
+        """Run an interaction while preserving the established two-value contract."""
+        agent, response, _ = await self.chat_with_summary(agent_id, message)
+        return agent, response
+
+    async def chat_with_summary(self, agent_id: UUID, message: str) -> tuple[Agent, LLMResponse, InteractionSummary]:
         """Run one IDLE Agent interaction and return its terminal record and LLM response."""
         agent = self._agent_registry.get(agent_id)
+        interaction_id = uuid4()
+        activities: list[ToolActivity] = []
         if agent.llm_model is None:
             raise LLMConfigurationError("Agent has no configured LLM model.")
         context = await self._agent_manager.get_context(agent_id)
@@ -56,7 +64,7 @@ class AgentInteractionService:
         current_messages = self._context_assembler.assemble(agent, context, message)
         messages = [*session.messages, *current_messages]
         tools = self._tool_definitions(agent)
-        await self._agent_manager.start_agent(agent_id)
+        await self._agent_manager.start_agent(agent_id, interaction_id=interaction_id)
         await self._agent_manager.append_session_messages(agent_id, *current_messages)
         try:
             for _ in range(self._max_tool_iterations):
@@ -65,24 +73,30 @@ class AgentInteractionService:
                         model=agent.llm_model,
                         messages=tuple(messages),
                         tools=tools,
+                        metadata={"agent_id": str(agent.id), "interaction_id": str(interaction_id)},
                     )
                 )
                 if not response.tool_calls:
                     assistant_message = self._assistant_tool_call_message(response)
                     await self._agent_manager.append_session_messages(agent_id, assistant_message)
-                    return await self._agent_manager.finish_interaction(agent_id), response
+                    return (
+                        await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id),
+                        response,
+                        InteractionSummary(interaction_id=interaction_id, tool_activities=tuple(activities)),
+                    )
                 assistant_message = self._assistant_tool_call_message(response)
                 messages.append(assistant_message)
                 await self._agent_manager.append_session_messages(agent_id, assistant_message)
                 for tool_call in response.tool_calls:
-                    tool_message = await self._tool_result_message(agent, tool_call)
+                    tool_message, activity = await self._tool_result_message(agent, tool_call, interaction_id)
                     messages.append(tool_message)
+                    activities.append(activity)
                     await self._agent_manager.append_session_messages(agent_id, tool_message)
         except Exception:
-            await self._agent_manager.finish_interaction(agent_id)
+            await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id)
             raise
         return (
-            await self._agent_manager.finish_interaction(agent_id),
+            await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id),
             LLMResponse(
                 content="Tool-call iteration limit reached.",
                 model=agent.llm_model,
@@ -90,6 +104,7 @@ class AgentInteractionService:
                 usage=response.usage,
                 metadata={"tool_iteration_limit": self._max_tool_iterations},
             ),
+            InteractionSummary(interaction_id=interaction_id, tool_activities=tuple(activities)),
         )
 
     def _tool_definitions(self, agent: Agent) -> tuple[ToolDefinition, ...]:
@@ -113,28 +128,36 @@ class AgentInteractionService:
             metadata={"tool_calls": response.tool_calls},
         )
 
-    async def _tool_result_message(self, agent: Agent, tool_call: ToolCall) -> Message:
+    async def _tool_result_message(
+        self, agent: Agent, tool_call: ToolCall, interaction_id: UUID
+    ) -> tuple[Message, ToolActivity]:
         if self._tool_manager is None:
             result = ToolResult(
                 tool_name=tool_call.name,
                 result={"success": False, "error": "Tool runtime is unavailable."},
             )
+            activity = ToolActivity(tool_name=tool_call.name, status="failed", error="Tool runtime is unavailable.")
         else:
-            _, rejection = ToolSafetyGate(self._tool_manager).validate(
+            _, rejection, category = ToolSafetyGate(self._tool_manager).validate(
                 tool_name=tool_call.name,
                 arguments=tool_call.arguments,
                 allowed_tools=agent.allowed_tools,
             )
             if rejection is not None:
+                await self._agent_manager.publish_tool_rejected(
+                    agent_id=agent.id, interaction_id=interaction_id, tool_name=tool_call.name, category=category or "unavailable"
+                )
                 result = ToolResult(
                     tool_name=tool_call.name,
                     result={"success": False, "error": rejection},
                 )
+                activity = ToolActivity(tool_name=tool_call.name, status="rejected", error=rejection)
             else:
                 try:
                     task = await self._tool_manager.execute(
                         tool_name=tool_call.name,
                         arguments=tool_call.arguments,
+                        metadata={"agent_id": str(agent.id), "interaction_id": str(interaction_id)},
                     )
                     execution_result = task.result
                     if execution_result is None or execution_result.status is not ToolResultStatus.COMPLETED:
@@ -142,18 +165,26 @@ class AgentInteractionService:
                             tool_name=tool_call.name,
                             result={"success": False, "error": "Tool execution failed."},
                         )
+                        activity = ToolActivity(
+                            tool_name=tool_call.name,
+                            status="failed",
+                            error="Tool execution failed.",
+                            duration=execution_result.duration,
+                        )
                     else:
                         result = ToolResult(
                             tool_name=tool_call.name,
                             result={"success": True, "result": execution_result.output},
                         )
+                        activity = ToolActivity(tool_name=tool_call.name, status="completed", result=execution_result.output, duration=execution_result.duration)
                 except Exception:
                     result = ToolResult(
                         tool_name=tool_call.name,
                         result={"success": False, "error": "Tool execution failed."},
                     )
+                    activity = ToolActivity(tool_name=tool_call.name, status="failed", error="Tool execution failed.")
         return Message(
             role=MessageRole.TOOL,
             content=json.dumps(result.result),
             metadata={"tool_call_id": tool_call.call_id, "tool_name": result.tool_name},
-        )
+        ), activity

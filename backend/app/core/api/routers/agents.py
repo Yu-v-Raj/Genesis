@@ -31,6 +31,7 @@ from backend.app.core.api.schemas.agents import (
     AgentListResponse,
     AgentMetadataUpdateRequest,
     AgentResponse,
+    AgentSessionResponse,
 )
 from backend.app.core.llm_runtime.domain.exceptions import (
     LLMConfigurationError,
@@ -181,8 +182,8 @@ async def chat(
 ) -> AgentChatResponse:
     """Run one initialized Agent turn through the provider-neutral LLM Runtime."""
     try:
-        agent, response = await interaction.chat(agent_id, request.message)
-        return AgentChatResponse.from_domain(agent, response)
+        agent, response, summary = await interaction.chat_with_summary(agent_id, request.message)
+        return AgentChatResponse.from_domain(agent, response, summary)
     except AgentNotFoundError as error:
         raise _not_found(error) from error
     except AgentLifecycleError as error:
@@ -197,6 +198,14 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
     except (LLMRuntimeError, ValueError) as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+
+@router.get("/{agent_id}/session", response_model=AgentSessionResponse)
+async def get_session(agent_id: UUID, manager: AgentManagerDependency) -> AgentSessionResponse:
+    try:
+        return AgentSessionResponse.from_domain(await manager.get_session(agent_id))
+    except AgentNotFoundError as error:
+        raise _not_found(error) from error
 
 
 async def _lifecycle_operation(

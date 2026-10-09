@@ -1,0 +1,21 @@
+"use client";
+
+import { FormEvent, useState } from "react";
+import { Bot, LoaderCircle, Send, Wrench, XCircle } from "lucide-react";
+import type { Agent, AgentChatResponse, ToolActivity } from "@/types/agents";
+
+function ToolCard({ activity }: { activity: ToolActivity }) {
+  const complete = activity.status === "completed";
+  const rejectedLabel = activity.error === "Requested tool is not allowed." ? "Not allowed for this Agent" : activity.error === "Requested tool is unavailable." ? "Tool is unavailable" : "Tool request was invalid";
+  return <div className="my-2 rounded-lg border border-border bg-background/50 p-3 text-xs"><div className="flex items-center gap-2 font-medium text-foreground"><Wrench className="h-3.5 w-3.5 text-primary" />Using {activity.tool_name}</div><p className={`mt-1 ${complete ? "text-emerald-300" : "text-red-200"}`}>{complete ? "Completed" : activity.status === "rejected" ? rejectedLabel : "Couldn't complete"}</p>{complete && activity.result !== null && <p className="mt-2 break-words text-foreground">Result: {typeof activity.result === "string" ? activity.result : JSON.stringify(activity.result)}</p>}{!complete && activity.error && <p className="mt-2 text-muted-foreground">{activity.error}</p>}</div>;
+}
+
+export function AgentConversation({ agent, messages, pending, error, onSend }: { agent: Agent | null; messages: { role: string; content: string }[]; pending: boolean; error: string | null; onSend: (message: string) => Promise<AgentChatResponse | null>; }) {
+  const [input, setInput] = useState(""); const [activities, setActivities] = useState<ToolActivity[]>([]);
+  async function submit(event: FormEvent) { event.preventDefault(); const response = await onSend(input); if (response) { setActivities(response.tool_activities); setInput(""); } }
+  const visibleMessages = messages.filter((message) => message.role !== "tool" && message.content.trim());
+  const finalMessage = activities.length ? visibleMessages.at(-1) : undefined;
+  const conversationMessages = finalMessage ? visibleMessages.slice(0, -1) : visibleMessages;
+  const bubble = (message: { role: string; content: string }, index: number) => <div key={`${index}-${message.content}`} className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${message.role === "user" ? "ml-auto bg-primary text-white" : "bg-background text-foreground"}`}>{message.content}</div>;
+  return <section className="rounded-xl border border-border bg-surface shadow-sm"><div className="border-b border-border p-4"><div className="flex items-center gap-2"><Bot className="h-4 w-4 text-primary" /><h2 className="font-semibold text-foreground">{agent ? agent.name : "Select an Agent"}</h2></div><p className="mt-1 text-xs text-muted-foreground">{agent ? "Conversation and visible tool activity." : "Choose an Agent to begin."}</p></div><div className="min-h-56 max-h-[32rem] space-y-3 overflow-y-auto p-4">{visibleMessages.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">Send a message to start this conversation.</p> : <>{conversationMessages.map(bubble)}{activities.map((activity, index) => <ToolCard key={`${activity.tool_name}-${index}`} activity={activity} />)}{finalMessage && bubble(finalMessage, visibleMessages.length - 1)}</>}{pending && <div className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="h-4 w-4 animate-spin" />Working…</div>}</div>{error && <p role="alert" className="mx-4 mb-3 flex items-center gap-2 rounded-lg border border-red-400/25 bg-red-400/5 p-3 text-xs text-red-200"><XCircle className="h-4 w-4" />{error}</p>}<form onSubmit={submit} className="flex gap-2 border-t border-border p-3"><input value={input} onChange={event => setInput(event.target.value)} disabled={!agent || pending} placeholder={agent ? "Message this Agent…" : "Select an Agent first"} className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50" /><button disabled={!agent || pending || !input.trim()} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 text-sm font-medium text-white disabled:opacity-50"><Send className="h-4 w-4" />Send</button></form></section>;
+}

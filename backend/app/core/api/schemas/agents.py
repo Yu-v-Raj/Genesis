@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext
+from backend.app.core.agent_runtime.domain.interaction import InteractionSummary
+from backend.app.core.agent_runtime.domain.session import AgentSession
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.api.schemas.llm import GenerateResponse, ModelRequest, ModelResponse
 from backend.app.core.llm_runtime.domain.models import LLMModel, LLMResponse
@@ -119,7 +121,31 @@ class AgentChatRequest(BaseModel):
 class AgentChatResponse(BaseModel):
     agent: AgentResponse
     response: GenerateResponse
+    interaction_id: UUID
+    tool_activities: list["ToolActivityResponse"]
 
     @classmethod
-    def from_domain(cls, agent: Agent, response: LLMResponse) -> "AgentChatResponse":
-        return cls(agent=AgentResponse.from_agent(agent), response=GenerateResponse.from_domain(response))
+    def from_domain(cls, agent: Agent, response: LLMResponse, interaction: InteractionSummary) -> "AgentChatResponse":
+        return cls(agent=AgentResponse.from_agent(agent), response=GenerateResponse.from_domain(response), interaction_id=interaction.interaction_id, tool_activities=[ToolActivityResponse.from_domain(activity) for activity in interaction.tool_activities])
+
+
+class ToolActivityResponse(BaseModel):
+    tool_name: str
+    status: str
+    result: object | None
+    error: str | None
+    duration: float | None
+
+    @classmethod
+    def from_domain(cls, activity: object) -> "ToolActivityResponse":
+        return cls(**{name: getattr(activity, name) for name in ("tool_name", "status", "result", "error", "duration")})
+
+
+class AgentSessionResponse(BaseModel):
+    id: UUID
+    agent_id: UUID
+    messages: list[dict[str, object]]
+
+    @classmethod
+    def from_domain(cls, session: AgentSession) -> "AgentSessionResponse":
+        return cls(id=session.id, agent_id=session.agent_id, messages=[{"role": message.role.value, "content": message.content} for message in session.messages])

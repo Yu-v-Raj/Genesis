@@ -78,7 +78,9 @@ class AgentRegistry:
         with self._lock:
             return len(self._agents)
 
-    async def update_status(self, agent_id: UUID, status: AgentStatus) -> Agent:
+    async def update_status(
+        self, agent_id: UUID, status: AgentStatus, *, interaction_id: UUID | None = None
+    ) -> Agent:
         """Create and store an Agent status transition, then publish it."""
         with self._lock:
             current_agent = self.get(agent_id)
@@ -93,6 +95,7 @@ class AgentRegistry:
                     "agent_id": str(agent_id),
                     "previous_status": current_agent.status.value,
                     "status": updated_agent.status.value,
+                    **({} if interaction_id is None else {"interaction_id": str(interaction_id)}),
                 },
             )
         )
