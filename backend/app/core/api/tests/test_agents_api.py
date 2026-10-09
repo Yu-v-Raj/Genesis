@@ -70,9 +70,6 @@ def test_agents_api_supports_lifecycle_metadata_and_context_operations(client: T
     agent_id = created.json()["id"]
     assert client.get(f"/api/agents/{agent_id}/context").json()["current_state"] == "created"
     assert client.post(f"/api/agents/{agent_id}/initialize").json()["status"] == "idle"
-    assert client.post(f"/api/agents/{agent_id}/start").json()["status"] == "running"
-    assert client.post(f"/api/agents/{agent_id}/pause").json()["status"] == "paused"
-    assert client.post(f"/api/agents/{agent_id}/resume").json()["status"] == "running"
 
     metadata = client.patch(f"/api/agents/{agent_id}/metadata", json={"metadata": {"priority": "high"}})
     context = client.patch(
@@ -100,11 +97,36 @@ def test_agents_api_rejects_invalid_lifecycle_transitions(client: TestClient) ->
         "/api/agents",
         json={"name": "planner", "description": "Plans future work.", "type": "planning"},
     ).json()["id"]
+    assert client.post(f"/api/agents/{agent_id}/stop").status_code == 200
 
-    response = client.post(f"/api/agents/{agent_id}/start")
+    response = client.post(f"/api/agents/{agent_id}/initialize")
 
     assert response.status_code == 409
     assert "cannot transition" in response.json()["detail"]
+
+
+def test_manual_run_controls_cannot_strand_a_reusable_agent(client: TestClient) -> None:
+    """Regression: POST /start used to leave an IDLE Agent RUNNING with no interaction."""
+    client.app.state.service_registry.resolve(LLMProviderRegistry).register(FakeProvider())
+    agent_id = client.post(
+        "/api/agents",
+        json={
+            "name": "assistant",
+            "description": "Answers questions.",
+            "type": "chat",
+            "llm_model": {"provider": "fake", "model_name": "fake-1"},
+            "initialize": True,
+        },
+    ).json()["id"]
+
+    for operation in ("start", "pause", "resume"):
+        response = client.post(f"/api/agents/{agent_id}/{operation}")
+        assert response.status_code == 409
+        assert "managed by conversations" in response.json()["detail"]
+    assert client.post(f"/api/agents/{uuid4()}/start").status_code == 404
+
+    assert client.get(f"/api/agents/{agent_id}").json()["status"] == "idle"
+    assert client.post(f"/api/agents/{agent_id}/chat", json={"message": "Hi"}).status_code == 200
 
 
 def test_agents_api_chats_through_the_registered_llm_provider(client: TestClient) -> None:
@@ -127,6 +149,11 @@ def test_agents_api_chats_through_the_registered_llm_provider(client: TestClient
 
     assert response.status_code == 200
     assert response.json()["agent"]["status"] == "idle"
+    assert response.json()["tool_activities"] == []
+    assert response.json()["interaction_id"]
+    session = client.get(f"/api/agents/{agent_id}/session")
+    assert session.status_code == 200
+    assert [message["role"] for message in session.json()["messages"]] == ["user", "assistant"]
     assert response.json()["response"]["content"] == "fake answer"
     assert response.json()["response"]["model"] == {
         "provider": "fake",

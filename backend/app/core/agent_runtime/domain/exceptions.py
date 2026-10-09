@@ -28,3 +28,25 @@ class AgentLifecycleError(AgentRegistryError):
         super().__init__(
             f"Agent '{agent_id}' cannot transition from '{current_state}' to '{requested_state}'."
         )
+
+
+class AgentUnavailableError(AgentLifecycleError):
+    """Raised with a user-facing reason when an Agent cannot accept a request now."""
+
+    def __init__(self, message: str) -> None:
+        AgentRegistryError.__init__(self, message)
+
+
+class AgentConfigurationError(AgentRegistryError):
+    """Raised when an Agent's LLM or tool configuration is invalid."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+class SessionNotFoundError(AgentRegistryError):
+    """Raised when a session does not exist or belongs to a different Agent."""
+
+    def __init__(self, session_id: UUID) -> None:
+        super().__init__(f"Session '{session_id}' was not found for this Agent.")

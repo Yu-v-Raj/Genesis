@@ -17,6 +17,7 @@ from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.application.provider import LLMProvider
 from backend.app.core.llm_runtime.application.provider_registry import LLMProviderRegistry
 from backend.app.core.llm_runtime.domain.models import LLMModel, LLMRequest, LLMResponse, ToolCall
+from backend.app.core.llm_runtime.infrastructure.gemini_provider import GeminiProvider
 from backend.app.core.tool_runtime.application.tool_executor import ToolExecutor
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
@@ -114,6 +115,38 @@ async def test_agent_executes_tool_and_feeds_result_back_to_llm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_tool_result_maps_to_gemini_with_call_id_and_signature() -> None:
+    model = LLMModel(provider="gemini", model_name="gemini-3.6-flash")
+    manager, service, provider = await service_with_responses(
+        (
+            LLMResponse(
+                content=None,
+                model=model,
+                tool_calls=(ToolCall(
+                    call_id="gemini-call-1",
+                    name="calculator",
+                    arguments={"expression": "25 * 4"},
+                    metadata={"thought_signature": b"signed"},
+                ),),
+            ),
+            LLMResponse(content="100", model=model),
+        )
+    )
+    agent = await initialized_agent(manager)
+
+    _, response = await service.chat(agent.id, "Calculate")
+    contents, _ = GeminiProvider._request_payload(provider.requests[1])
+
+    assert response.content == "100"
+    assert contents[1]["parts"][0]["thought_signature"] == b"signed"
+    assert contents[2]["parts"][0]["function_response"] == {
+        "id": "gemini-call-1",
+        "name": "calculator",
+        "response": {"success": True, "result": 100},
+    }
+
+
+@pytest.mark.asyncio
 async def test_agent_executes_multiple_tool_calls_sequentially() -> None:
     model = LLMModel(provider="fake", model_name="fake-1")
     manager, service, provider = await service_with_responses(
@@ -183,11 +216,15 @@ async def test_agent_advertises_and_executes_only_allowed_tools() -> None:
     )
     agent = await initialized_agent(manager, allowed_tools=("calculator",))
 
-    _, response = await service.chat(agent.id, "Calculate")
+    _, response, summary = await service.chat_with_summary(agent.id, "Calculate")
 
     assert response.content == "21"
     assert [tool.name for tool in provider.requests[0].tools] == ["calculator"]
     assert json.loads(provider.requests[1].messages[2].content) == {"success": True, "result": 21}
+    assert summary.tool_activities[0].tool_name == "calculator"
+    assert summary.tool_activities[0].status == "completed"
+    assert summary.tool_activities[0].result == 21
+    assert provider.requests[0].metadata["interaction_id"] == str(summary.interaction_id)
 
 
 @pytest.mark.asyncio
@@ -209,7 +246,7 @@ async def test_forbidden_and_invalid_calls_are_rejected_before_execution() -> No
     )
     agent = await initialized_agent(manager, allowed_tools=("calculator",))
 
-    _, response = await service.chat(agent.id, "Use tools")
+    _, response, summary = await service.chat_with_summary(agent.id, "Use tools")
 
     assert response.content == "9"
     results = [json.loads(message.content) for message in provider.requests[1].messages[2:]]
@@ -220,6 +257,7 @@ async def test_forbidden_and_invalid_calls_are_rejected_before_execution() -> No
     ]
     assert service._tool_manager is not None
     assert [task.tool_name for task in service._tool_manager.history()] == ["calculator"]
+    assert [activity.status for activity in summary.tool_activities] == ["rejected", "rejected", "completed"]
 
 
 @pytest.mark.asyncio

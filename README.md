@@ -564,15 +564,58 @@ GEMINI_TIMEOUT_SECONDS=30
 
 ## 3. Install backend dependencies
 
+Requires Python 3.12+.
+
 ```bash
-python -m pip install -e .
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 ```
 
-## 4. Start the backend
+## 4. Set up the database
+
+Agents and conversations are stored in the database named by `DATABASE_URL` (see
+`docs/20-Agent-Persistence.md`). PostgreSQL is the supported engine:
+
+```bash
+brew install postgresql@17
+brew services start postgresql@17
+createdb genesis
+```
+
+```env
+DATABASE_URL=postgresql+asyncpg://localhost:5432/genesis
+```
+
+For a zero-setup local database you can use SQLite instead:
+
+```env
+DATABASE_URL=sqlite+aiosqlite:///./genesis.db
+```
+
+Relative SQLite paths are resolved from the project root, so the backend, Alembic, and
+scripts use the same file whichever directory they start in. `*.db` files are git-ignored.
+
+`DATABASE_URL` is read from, in order of precedence: an exported environment variable,
+then `.env` in the project root, then the built-in default (local PostgreSQL). If the
+backend reports a different database than you expect, check `echo $DATABASE_URL` and that
+`.env` was saved.
+
+Then create or update the schema (run again after pulling new migrations):
+
+```bash
+alembic upgrade head
+```
+
+## 5. Start the backend
 
 ```bash
 python -m uvicorn backend.app.main:app --reload
 ```
+
+The backend refuses to start, with an explanation, if the database is unreachable or not
+migrated. Agent definitions, configuration, and conversation history survive restarts;
+in-flight replies, executions, workflows, memory records, and events do not.
 
 Backend:
 
@@ -586,13 +629,33 @@ Swagger:
 http://127.0.0.1:8000/docs
 ```
 
-## 5. Start the frontend
+## 6. Start the frontend
 
-From `frontend`:
+From `frontend` (Node 22+; the committed `package-lock.json` is the source of truth):
 
 ```bash
-npm install
+npm ci
 npm run dev
+```
+
+If port 3000 is busy, Next.js uses 3001; in development the backend accepts any
+localhost port.
+
+## 7. Create an Agent and chat
+
+Open **Agents → Create Agent**, pick a model marked *Ready* (it needs that provider's
+API key in `.env`), allow the calculator, and ask "Calculate 25 * 4".
+
+## 8. Run the checks
+
+Tests use their own temporary databases and never touch `DATABASE_URL`.
+
+```bash
+python -m pytest backend -q
+alembic check
+npm --prefix frontend test
+npm --prefix frontend run lint
+npm --prefix frontend run build
 ```
 
 Frontend:

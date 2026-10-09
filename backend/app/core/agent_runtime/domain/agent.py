@@ -14,6 +14,7 @@ from backend.app.core.llm_runtime.domain.models import LLMModel
 # predate tool policy while preventing newly registered tools from being exposed
 # automatically.
 DEFAULT_ALLOWED_TOOLS = ("echo", "calculator", "uuid", "random_number", "delay")
+MAX_INSTRUCTIONS_LENGTH = 4000
 
 
 def _utc_now() -> datetime:
@@ -35,6 +36,7 @@ class Agent:
     tags: tuple[str, ...] = ()
     llm_model: LLMModel | None = None
     allowed_tools: tuple[str, ...] = DEFAULT_ALLOWED_TOOLS
+    instructions: str = ""
 
     def __post_init__(self) -> None:
         """Validate and freeze collection values at the domain boundary."""
@@ -57,6 +59,10 @@ class Agent:
             raise TypeError("Agent llm_model must be an LLMModel or None.")
         if not all(isinstance(tool_name, str) and tool_name.strip() for tool_name in self.allowed_tools):
             raise ValueError("Agent allowed_tools must contain non-empty strings.")
+        if not isinstance(self.instructions, str) or len(self.instructions) > MAX_INSTRUCTIONS_LENGTH:
+            raise ValueError(
+                f"Agent instructions must be a string of at most {MAX_INSTRUCTIONS_LENGTH} characters."
+            )
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
         object.__setattr__(self, "tags", tuple(self.tags))
         object.__setattr__(self, "allowed_tools", tuple(self.allowed_tools))
@@ -70,3 +76,19 @@ class Agent:
     def with_metadata(self, metadata: Mapping[str, object]) -> "Agent":
         """Return a new record with supplied metadata merged into its metadata."""
         return replace(self, metadata={**self.metadata, **metadata}, updated_at=_utc_now())
+
+    def with_configuration(
+        self,
+        *,
+        llm_model: LLMModel | None,
+        allowed_tools: tuple[str, ...],
+        instructions: str,
+    ) -> "Agent":
+        """Return a new record with replaced LLM, tool, and instruction configuration."""
+        return replace(
+            self,
+            llm_model=llm_model,
+            allowed_tools=allowed_tools,
+            instructions=instructions,
+            updated_at=_utc_now(),
+        )

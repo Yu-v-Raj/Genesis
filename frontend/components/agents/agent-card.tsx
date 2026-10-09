@@ -6,12 +6,14 @@ import {
   FileText, Globe2, LoaderCircle, Pause, Play, Rocket, Square, Trash2, XCircle,
 } from "lucide-react";
 
-import { ExecutionBadge, ExecutionPanel, formatDuration } from "@/components/agents/execution-panel";
+import { ExecutionPanel, formatDuration } from "@/components/agents/execution-panel";
 import type { Agent, AgentContext } from "@/types/agents";
 import type { Execution } from "@/types/executions";
 import type { RealtimeEvent } from "@/types/realtime";
 
-type LifecycleAction = "initialize" | "start" | "pause" | "resume" | "stop" | "delete";
+// Conversations own RUNNING; manual start/pause/resume could strand an Agent, so the
+// card only offers setup and retirement actions.
+type LifecycleAction = "initialize" | "stop" | "delete";
 
 interface AgentCardProps {
   agent: Agent;
@@ -41,12 +43,8 @@ const statusPresentation: Record<Agent["status"], { className: string; Icon: typ
 
 function actionsFor(status: Agent["status"]): LifecycleAction[] {
   if (status === "created") return ["initialize", "stop"];
-  if (status === "idle") return ["start", "stop"];
-  if (status === "running") return ["pause", "stop"];
-  if (status === "waiting") return ["start", "stop"];
-  if (status === "paused") return ["resume", "stop"];
   if (status === "stopped") return ["delete"];
-  return status === "completed" || status === "failed" ? ["stop"] : [];
+  return status === "initializing" ? [] : ["stop"];
 }
 
 function actionLabel(action: LifecycleAction): string {
@@ -54,7 +52,6 @@ function actionLabel(action: LifecycleAction): string {
 }
 
 function ActionIcon({ action }: { action: LifecycleAction }) {
-  if (action === "pause") return <Pause className="h-3.5 w-3.5" />;
   if (action === "stop") return <CircleStop className="h-3.5 w-3.5" />;
   if (action === "delete") return <Trash2 className="h-3.5 w-3.5" />;
   return <Play className="h-3.5 w-3.5" />;

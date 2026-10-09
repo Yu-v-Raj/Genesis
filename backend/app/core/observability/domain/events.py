@@ -95,6 +95,13 @@ class ToolFailed(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ToolRejected(Event):
+    """Published when Agent safety rejects an untrusted tool call."""
+
+    event_type: str = field(init=False, default="tool.rejected")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TaskCreated(Event):
     """Published when Tool Runtime creates a task for execution work."""
 
@@ -185,6 +192,27 @@ class AgentMetadataUpdated(Event):
     """Published when Agent Runtime metadata is updated."""
 
     event_type: str = field(init=False, default="agent.metadata_updated")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentRestored(Event):
+    """Published when a stored Agent is loaded back into the runtime at startup."""
+
+    event_type: str = field(init=False, default="agent.restored")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SessionCreated(Event):
+    """Published when a new conversation session is started for an Agent."""
+
+    event_type: str = field(init=False, default="agent.session_created")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentConfigurationUpdated(Event):
+    """Published when an Agent's LLM, tool, or instruction configuration changes."""
+
+    event_type: str = field(init=False, default="agent.configuration_updated")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

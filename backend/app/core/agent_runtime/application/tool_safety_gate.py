@@ -15,17 +15,17 @@ class ToolSafetyGate:
 
     def validate(
         self, *, tool_name: str, arguments: Mapping[str, object], allowed_tools: tuple[str, ...]
-    ) -> tuple[Tool | None, str | None]:
+    ) -> tuple[Tool | None, str | None, str | None]:
         """Return an executable tool or a generic, LLM-safe rejection message."""
         try:
             tool = self._tool_manager.get_tool(tool_name)
         except ToolNotFoundError:
-            return None, "Requested tool is unavailable."
+            return None, "Requested tool is unavailable.", "unavailable"
         if tool_name not in allowed_tools:
-            return None, "Requested tool is not allowed."
+            return None, "Requested tool is not allowed.", "not_allowed"
         if not _matches_schema(arguments, tool.definition.parameters):
-            return None, "Tool arguments are invalid."
-        return tool, None
+            return None, "Tool arguments are invalid.", "invalid_arguments"
+        return tool, None, None
 
 
 def _matches_schema(value: object, schema: Mapping[str, object]) -> bool:

@@ -6,10 +6,16 @@ import { AgentApiError, AgentService } from "@/services/agent.service";
 import { EventHistoryService } from "@/services/event-history.service";
 import type { RealtimeState } from "@/hooks/use-realtime";
 import type { RealtimeEvent } from "@/types/realtime";
-import type { Agent, AgentContext, CreateAgentInput } from "@/types/agents";
+import type { Agent, AgentConfigurationInput, AgentContext, AgentStatus, CreateAgentInput } from "@/types/agents";
+
+type LifecycleAction = "initialize" | "stop" | "delete";
 
 const AGENT_EVENT_TYPES = new Set([
   "agent.created",
+  // Interactions return Agents to IDLE with only a status change, so it must be tracked.
+  "agent.status_changed",
+  "agent.configuration_updated",
+  "agent.restored",
   "agent.initialized",
   "agent.started",
   "agent.paused",
@@ -55,11 +61,10 @@ export interface AgentsState {
   pendingAgentIds: ReadonlySet<string>;
   connectionStatus: RealtimeState["connectionStatus"];
   latestAgentEvent: RealtimeEvent | null;
-  createAgent: (input: CreateAgentInput) => Promise<boolean>;
-  runLifecycleAction: (
-    agentId: string,
-    action: "initialize" | "start" | "pause" | "resume" | "stop" | "delete"
-  ) => Promise<boolean>;
+  createAgent: (input: CreateAgentInput) => Promise<Agent | null>;
+  updateConfiguration: (agentId: string, input: Partial<AgentConfigurationInput>) => Promise<Agent | null>;
+  upsertAgent: (agent: Agent) => void;
+  runLifecycleAction: (agentId: string, action: LifecycleAction) => Promise<boolean>;
   loadContext: (agentId: string) => Promise<void>;
   retry: () => Promise<void>;
 }
@@ -119,6 +124,15 @@ export function useAgents(realtime: RealtimeState): AgentsState {
         return;
       }
 
+      const status = latestAgentEvent.payload.status;
+      if (latestAgentEvent.event_type === "agent.status_changed" && typeof status === "string") {
+        // The payload is authoritative for status; avoid a refetch per transition.
+        setAgents((current) =>
+          current.map((agent) => (agent.id === agentId ? { ...agent, status: status as AgentStatus } : agent))
+        );
+        return;
+      }
+
       void AgentService.get(agentId)
         .then((agent) => setAgents((current) => upsertAgent(current, agent)))
         .catch(() => undefined);
@@ -126,26 +140,30 @@ export function useAgents(realtime: RealtimeState): AgentsState {
   }, [latestAgentEvent]);
 
   const createAgent = useCallback(
-    async (input: CreateAgentInput): Promise<boolean> => {
-      setError(null);
-      try {
-        const agent = await AgentService.create(input);
-        setAgents((current) => upsertAgent(current, agent));
-        void refreshEvents();
-        return true;
-      } catch (caughtError) {
-        setError(errorMessage(caughtError));
-        return false;
-      }
+    async (input: CreateAgentInput): Promise<Agent | null> => {
+      const agent = await AgentService.create(input);
+      setAgents((current) => upsertAgent(current, agent));
+      void refreshEvents();
+      return agent;
     },
     [refreshEvents]
   );
 
+  const updateConfiguration = useCallback(
+    async (agentId: string, input: Partial<AgentConfigurationInput>): Promise<Agent | null> => {
+      const agent = await AgentService.updateConfiguration(agentId, input);
+      setAgents((current) => upsertAgent(current, agent));
+      return agent;
+    },
+    []
+  );
+
+  const upsertAgentRecord = useCallback((agent: Agent) => {
+    setAgents((current) => upsertAgent(current, agent));
+  }, []);
+
   const runLifecycleAction = useCallback(
-    async (
-      agentId: string,
-      action: "initialize" | "start" | "pause" | "resume" | "stop" | "delete"
-    ): Promise<boolean> => {
+    async (agentId: string, action: LifecycleAction): Promise<boolean> => {
       setPendingAgentIds((current) => new Set(current).add(agentId));
       setError(null);
       try {
@@ -202,6 +220,8 @@ export function useAgents(realtime: RealtimeState): AgentsState {
     connectionStatus,
     latestAgentEvent,
     createAgent,
+    updateConfiguration,
+    upsertAgent: upsertAgentRecord,
     runLifecycleAction,
     loadContext,
     retry: loadAgents,

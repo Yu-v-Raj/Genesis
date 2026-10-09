@@ -16,3 +16,7 @@ DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://localhost:5432/genesis"
 DEFAULT_EVENT_HISTORY_SIZE = 1000
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
+DEFAULT_CORS_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
+# Next.js moves to the next free port (3001, 3002, ...) when 3000 is busy, so local
+# development accepts any loopback port instead of failing with a CORS error.
+LOCAL_DEVELOPMENT_ORIGIN_REGEX = r"^http://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"

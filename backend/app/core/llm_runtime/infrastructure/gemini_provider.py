@@ -139,8 +139,11 @@ class GeminiProvider(LLMProvider):
                 continue
             if message.role is MessageRole.TOOL and "tool_name" in message.metadata:
                 tool_name = message.metadata.get("tool_name")
+                tool_call_id = message.metadata.get("tool_call_id")
                 if not isinstance(tool_name, str) or not tool_name:
                     raise ValueError("Tool result metadata requires a tool name.")
+                if not isinstance(tool_call_id, str) or not tool_call_id:
+                    raise ValueError("Tool result metadata requires a tool-call ID.")
                 try:
                     result = json.loads(message.content)
                 except json.JSONDecodeError:
@@ -151,6 +154,7 @@ class GeminiProvider(LLMProvider):
                         "parts": [
                             {
                                 "function_response": {
+                                    "id": tool_call_id,
                                     "name": tool_name,
                                     "response": result,
                                 }
@@ -194,8 +198,9 @@ class GeminiProvider(LLMProvider):
         candidate = candidates[0] if candidates else None
         finish_reason = None if candidate is None else cls._finish_reason(candidate.finish_reason)
         usage_metadata = response.usage_metadata
+        tool_calls = cls._tool_calls(candidate)
         return LLMResponse(
-            content=getattr(response, "text", None),
+            content=cls._response_text(response, candidate, has_tool_calls=bool(tool_calls)),
             model=model,
             finish_reason=finish_reason,
             usage=Usage(
@@ -203,9 +208,26 @@ class GeminiProvider(LLMProvider):
                 output_tokens=cls._token_count(usage_metadata, "candidates_token_count"),
                 total_tokens=cls._token_count(usage_metadata, "total_token_count"),
             ),
-            tool_calls=cls._tool_calls(candidate),
+            tool_calls=tool_calls,
             metadata={},
         )
+
+    @staticmethod
+    def _response_text(response: Any, candidate: Any, *, has_tool_calls: bool) -> str | None:
+        """Read visible text without invoking the SDK's function-call text helper."""
+        if has_tool_calls:
+            return None
+        parts = getattr(getattr(candidate, "content", None), "parts", None) or ()
+        visible_parts = [
+            text
+            for part in parts
+            if not getattr(part, "thought", False)
+            and isinstance((text := getattr(part, "text", None)), str)
+        ]
+        if visible_parts:
+            return "".join(visible_parts)
+        text = getattr(response, "text", None)
+        return text if isinstance(text, str) else None
 
     @staticmethod
     def _tool_calls(candidate: Any) -> tuple[ToolCall, ...]:

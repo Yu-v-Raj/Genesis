@@ -54,4 +54,8 @@ class ToolExecutor:
             payload["execution_id"] = str(request.execution_id)
         if request.task_id is not None:
             payload["task_id"] = str(request.task_id)
+        for key in ("agent_id", "interaction_id"):
+            value = request.metadata.get(key)
+            if isinstance(value, str):
+                payload[key] = value
         await self._event_bus.publish(event_type(source="tool_executor", payload=payload))
