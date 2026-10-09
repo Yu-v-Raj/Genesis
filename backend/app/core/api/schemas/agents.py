@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from backend.app.core.agent_runtime.domain.agent import MAX_INSTRUCTIONS_LENGTH, Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext
 from backend.app.core.agent_runtime.domain.interaction import InteractionSummary
-from backend.app.core.agent_runtime.domain.session import AgentSession
+from backend.app.core.agent_runtime.domain.session import AgentSession, AgentSessionSummary
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.api.schemas.llm import GenerateResponse, ModelRequest, ModelResponse
 from backend.app.core.llm_runtime.domain.models import LLMModel, LLMResponse, Message, ToolCall
@@ -133,17 +133,21 @@ class AgentContextUpdateRequest(BaseModel):
 
 class AgentChatRequest(BaseModel):
     message: str = Field(min_length=1)
+    session_id: UUID | None = Field(
+        default=None, description="Continue this session; defaults to the Agent's active session."
+    )
 
 
 class AgentChatResponse(BaseModel):
     agent: AgentResponse
     response: GenerateResponse
     interaction_id: UUID
+    session_id: UUID | None
     tool_activities: list["ToolActivityResponse"]
 
     @classmethod
     def from_domain(cls, agent: Agent, response: LLMResponse, interaction: InteractionSummary) -> "AgentChatResponse":
-        return cls(agent=AgentResponse.from_agent(agent), response=GenerateResponse.from_domain(response), interaction_id=interaction.interaction_id, tool_activities=[ToolActivityResponse.from_domain(activity) for activity in interaction.tool_activities])
+        return cls(agent=AgentResponse.from_agent(agent), response=GenerateResponse.from_domain(response), interaction_id=interaction.interaction_id, session_id=interaction.session_id, tool_activities=[ToolActivityResponse.from_domain(activity) for activity in interaction.tool_activities])
 
 
 class ToolActivityResponse(BaseModel):
@@ -189,11 +193,40 @@ class SessionMessageResponse(BaseModel):
 class AgentSessionResponse(BaseModel):
     id: UUID
     agent_id: UUID
+    created_at: datetime
+    updated_at: datetime
     messages: list[SessionMessageResponse]
 
     @classmethod
     def from_domain(cls, session: AgentSession) -> "AgentSessionResponse":
-        return cls(id=session.id, agent_id=session.agent_id, messages=[SessionMessageResponse.from_domain(message) for message in session.messages])
+        return cls(id=session.id, agent_id=session.agent_id, created_at=session.created_at, updated_at=session.updated_at, messages=[SessionMessageResponse.from_domain(message) for message in session.messages])
+
+
+class AgentSessionSummaryResponse(BaseModel):
+    id: UUID
+    agent_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    message_count: int
+    title: str | None
+
+    @classmethod
+    def from_domain(cls, summary: AgentSessionSummary) -> "AgentSessionSummaryResponse":
+        return cls(
+            id=summary.id,
+            agent_id=summary.agent_id,
+            created_at=summary.created_at,
+            updated_at=summary.updated_at,
+            message_count=summary.message_count,
+            title=summary.title,
+        )
+
+
+class AgentSessionListResponse(BaseModel):
+    """An Agent's sessions, most recently active first; ``active_session_id`` is resumed by default."""
+
+    active_session_id: UUID | None
+    sessions: list[AgentSessionSummaryResponse]
 
 
 def _optional_str(value: object) -> str | None:

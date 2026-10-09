@@ -16,4 +16,5 @@ class ToolActivity:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class InteractionSummary:
     interaction_id: UUID = field(default_factory=uuid4)
+    session_id: UUID | None = None
     tool_activities: tuple[ToolActivity, ...] = ()

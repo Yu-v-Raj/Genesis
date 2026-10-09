@@ -4,15 +4,22 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from time import monotonic
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.app.core.api.router import api_router
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.agent_runtime.application.agent_configuration_service import AgentConfigurationService
+from backend.app.core.agent_runtime.infrastructure.sqlalchemy_repositories import (
+    SqlAlchemyAgentRepository,
+    SqlAlchemySessionRepository,
+)
 from backend.app.core.core_services.config.settings import settings
+from backend.app.core.core_services.logging.logger import logger
+from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.core_services.service_registry import ServiceRegistry
 from backend.app.core.execution_runtime.application.execution_executor import ExecutionExecutor
@@ -43,18 +50,30 @@ from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.application.provider_registry import LLMProviderRegistry
 from backend.app.core.llm_runtime.infrastructure.openai_provider import OpenAIProvider
 from backend.app.core.llm_runtime.infrastructure.gemini_provider import GeminiProvider
+from backend.app.database import create_database_engine, create_session_factory
+from backend.app.database.migrations import DatabaseStartupError, verify_database
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage application lifecycle resources."""
+    database_engine = create_database_engine(settings.DATABASE_URL)
+    try:
+        await verify_database(database_engine)
+    except DatabaseStartupError as error:
+        await database_engine.dispose()
+        logger.error(str(error))
+        raise
+    session_factory = create_session_factory(database_engine)
     service_registry = ServiceRegistry()
     event_bus = EventBus()
     event_history = EventHistory(settings.EVENT_HISTORY_SIZE)
     websocket_manager = WebSocketManager()
     realtime_gateway = RealtimeGateway(websocket_manager)
-    agent_registry = AgentRegistry(event_bus)
-    agent_manager = AgentManager(agent_registry, event_bus)
+    agent_registry = AgentRegistry(event_bus, SqlAlchemyAgentRepository(session_factory))
+    agent_manager = AgentManager(
+        agent_registry, event_bus, SqlAlchemySessionRepository(session_factory)
+    )
     execution_history = ExecutionHistory()
     execution_executor = ExecutionExecutor()
     execution_manager = ExecutionManager(
@@ -153,6 +172,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             ServiceRegistered(source="bootstrap", payload={"service": service_name})
         )
 
+    await agent_manager.restore_agents()
     await runtime_manager.startup()
     await event_bus.publish(SystemStarted(source="runtime"))
     await logger_service.info("Genesis application startup", source="runtime")
@@ -164,6 +184,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await runtime_manager.shutdown()
         await event_bus.publish(SystemStopped(source="runtime"))
         await logger_service.info("Genesis application shutdown", source="runtime")
+        await database_engine.dispose()
 
 
 app = FastAPI(
@@ -184,3 +205,14 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+
+@app.exception_handler(PersistenceConflictError)
+async def persistence_conflict_handler(_: Request, error: PersistenceConflictError) -> JSONResponse:
+    return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"detail": str(error)})
+
+
+@app.exception_handler(PersistenceError)
+async def persistence_error_handler(_: Request, error: PersistenceError) -> JSONResponse:
+    """Storage failures become a retryable 503 whose message names no URL or credentials."""
+    return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"detail": str(error)})

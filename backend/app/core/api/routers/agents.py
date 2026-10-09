@@ -18,6 +18,7 @@ from backend.app.core.agent_runtime.domain.exceptions import (
     AgentNotFoundError,
     AgentUnavailableError,
     DuplicateAgentError,
+    SessionNotFoundError,
 )
 from backend.app.core.api.dependencies.system import (
     get_agent_configuration_service,
@@ -36,7 +37,9 @@ from backend.app.core.api.schemas.agents import (
     AgentListResponse,
     AgentMetadataUpdateRequest,
     AgentResponse,
+    AgentSessionListResponse,
     AgentSessionResponse,
+    AgentSessionSummaryResponse,
 )
 from backend.app.core.llm_runtime.domain.exceptions import (
     LLMConfigurationError,
@@ -228,9 +231,11 @@ async def chat(
 ) -> AgentChatResponse:
     """Run one initialized Agent turn through the provider-neutral LLM Runtime."""
     try:
-        agent, response, summary = await interaction.chat_with_summary(agent_id, request.message)
+        agent, response, summary = await interaction.chat_with_summary(
+            agent_id, request.message, request.session_id
+        )
         return AgentChatResponse.from_domain(agent, response, summary)
-    except AgentNotFoundError as error:
+    except (AgentNotFoundError, SessionNotFoundError) as error:
         raise _not_found(error) from error
     except AgentLifecycleError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -248,9 +253,46 @@ async def chat(
 
 @router.get("/{agent_id}/session", response_model=AgentSessionResponse)
 async def get_session(agent_id: UUID, manager: AgentManagerDependency) -> AgentSessionResponse:
+    """Return the Agent's active session (the one chat continues by default)."""
     try:
         return AgentSessionResponse.from_domain(await manager.get_session(agent_id))
     except AgentNotFoundError as error:
+        raise _not_found(error) from error
+
+
+@router.get("/{agent_id}/sessions", response_model=AgentSessionListResponse)
+async def list_sessions(agent_id: UUID, manager: AgentManagerDependency) -> AgentSessionListResponse:
+    """List the Agent's stored conversations, most recently active first."""
+    try:
+        sessions = await manager.list_sessions(agent_id)
+        active = manager.active_session_id(agent_id)
+    except AgentNotFoundError as error:
+        raise _not_found(error) from error
+    return AgentSessionListResponse(
+        active_session_id=active if any(summary.id == active for summary in sessions) else None,
+        sessions=[AgentSessionSummaryResponse.from_domain(summary) for summary in sessions],
+    )
+
+
+@router.post("/{agent_id}/sessions", response_model=AgentSessionResponse, status_code=status.HTTP_201_CREATED)
+async def start_session(agent_id: UUID, manager: AgentManagerDependency) -> AgentSessionResponse:
+    """Start a new, empty conversation and make it the Agent's active session."""
+    try:
+        return AgentSessionResponse.from_domain(await manager.start_session(agent_id))
+    except AgentNotFoundError as error:
+        raise _not_found(error) from error
+    except AgentUnavailableError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+
+@router.get("/{agent_id}/sessions/{session_id}", response_model=AgentSessionResponse)
+async def get_stored_session(
+    agent_id: UUID, session_id: UUID, manager: AgentManagerDependency
+) -> AgentSessionResponse:
+    """Return one of the Agent's sessions with its full display-safe history."""
+    try:
+        return AgentSessionResponse.from_domain(await manager.get_session(agent_id, session_id))
+    except (AgentNotFoundError, SessionNotFoundError) as error:
         raise _not_found(error) from error
 
 
@@ -267,7 +309,7 @@ async def _lifecycle_operation(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
 
-def _not_found(error: AgentNotFoundError) -> HTTPException:
+def _not_found(error: AgentNotFoundError | SessionNotFoundError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
 
 

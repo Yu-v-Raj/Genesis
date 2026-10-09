@@ -46,3 +46,9 @@ Thumbs.db
 .vscode/
 !.vscode/extensions.json
 !.vscode/settings.json
+
+# Local SQLite databases (DATABASE_URL=sqlite+aiosqlite:///./genesis.db)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

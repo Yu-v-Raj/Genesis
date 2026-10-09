@@ -112,6 +112,21 @@ This document deliberately stops short of defining concrete tables, columns, and
 
 Any such addition must be evaluated against Sections 2–4 of this document before being merged, so that concrete schema growth continues to reflect — rather than erode — Genesis's architectural boundaries.
 
+## 8.1 Implemented Schema (v0.11)
+
+The first concrete tables hold Agent Runtime state: `agents`, `agent_sessions`, and
+`agent_session_messages`, created by Alembic revision `0001` (`infra/migrations/`). Their
+columns, constraints, restoration policy, and guarantees are documented in
+`20-Agent-Persistence.md`.
+
+Two deliberate deviations from the plan above, both reversible by a later migration:
+
+- Tables live in the default schema rather than a `core_runtime` namespace, so the same
+  migrations also run on SQLite, which is used for isolated tests and zero-setup local
+  development. PostgreSQL remains the supported production engine.
+- JSON columns use JSONB on PostgreSQL and JSON on SQLite; nothing queries inside them yet,
+  so no JSON indexes exist (Section 6).
+
 ## 9. Relationship to Other Documents
 
 This document defines database philosophy, organization, and evolution strategy. It intentionally does not define:

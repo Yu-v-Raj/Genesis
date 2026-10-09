@@ -195,6 +195,20 @@ class AgentMetadataUpdated(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AgentRestored(Event):
+    """Published when a stored Agent is loaded back into the runtime at startup."""
+
+    event_type: str = field(init=False, default="agent.restored")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SessionCreated(Event):
+    """Published when a new conversation session is started for an Agent."""
+
+    event_type: str = field(init=False, default="agent.session_created")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AgentConfigurationUpdated(Event):
     """Published when an Agent's LLM, tool, or instruction configuration changes."""
 

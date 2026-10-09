@@ -2,17 +2,25 @@
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 from uuid import UUID
 
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
+from backend.app.core.agent_runtime.application.in_memory_repositories import InMemorySessionRepository
+from backend.app.core.agent_runtime.application.repositories import SessionRepository
 from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext, UNSET
-from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError, AgentUnavailableError
-from backend.app.core.agent_runtime.domain.session import AgentSession
+from backend.app.core.agent_runtime.domain.exceptions import (
+    AgentLifecycleError,
+    AgentUnavailableError,
+    SessionNotFoundError,
+)
+from backend.app.core.agent_runtime.domain.session import AgentSession, AgentSessionSummary
 from backend.app.core.observability.domain.events import ToolRejected
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.llm_runtime.domain.models import LLMModel, Message
 from backend.app.core.core_services.event_bus import EventBus
+from backend.app.core.core_services.logging.logger import logger
 from backend.app.core.observability.domain.events import (
     AgentCompleted,
     AgentContextUpdated,
@@ -21,9 +29,11 @@ from backend.app.core.observability.domain.events import (
     AgentFailed,
     AgentInitialized,
     AgentPaused,
+    AgentRestored,
     AgentResumed,
     AgentStarted,
     AgentStopped,
+    SessionCreated,
 )
 
 
@@ -51,11 +61,16 @@ class AgentManager:
 
     _CONFIGURABLE_STATES = frozenset({AgentStatus.CREATED, AgentStatus.IDLE})
 
-    def __init__(self, registry: AgentRegistry, event_bus: EventBus) -> None:
+    def __init__(
+        self,
+        registry: AgentRegistry,
+        event_bus: EventBus,
+        sessions: SessionRepository | None = None,
+    ) -> None:
         self._registry = registry
         self._event_bus = event_bus
+        self._sessions = sessions or InMemorySessionRepository()
         self._contexts: dict[UUID, AgentContext] = {}
-        self._sessions: dict[UUID, AgentSession] = {}
         self._lock = asyncio.Lock()
 
     async def create_agent(
@@ -86,10 +101,10 @@ class AgentManager:
         async with self._lock:
             await self._registry.register(agent)
             session = AgentSession(agent_id=agent.id)
-            self._sessions[agent.id] = session
-            self._contexts[agent.id] = AgentContext(
-                current_state=agent.status, session_id=session.id
-            )
+            # The context exists before the session is stored, so if storing the first
+            # session fails the Agent stays usable and get_session() starts one later.
+            self._contexts[agent.id] = AgentContext(current_state=agent.status, session_id=session.id)
+            await self._sessions.create(session)
         await self._event_bus.publish(
             AgentCreated(source="agent_manager", payload={"agent_id": str(agent.id)})
         )
@@ -99,8 +114,8 @@ class AgentManager:
         """Remove an Agent and its runtime-only context."""
         async with self._lock:
             agent = await self._registry.unregister(agent_id)
+            await self._sessions.delete_for_agent(agent_id)
             self._contexts.pop(agent_id, None)
-            self._sessions.pop(agent_id, None)
         await self._event_bus.publish(
             AgentDeleted(source="agent_manager", payload={"agent_id": str(agent_id)})
         )
@@ -199,19 +214,94 @@ class AgentManager:
             self._registry.get(agent_id)
             return self._contexts[agent_id]
 
-    async def get_session(self, agent_id: UUID) -> AgentSession:
-        """Return the Agent's current ephemeral conversation session."""
-        async with self._lock:
-            self._registry.get(agent_id)
-            return self._sessions[agent_id]
+    async def restore_agents(self) -> tuple[Agent, ...]:
+        """Load stored Agents into the runtime after a restart.
 
-    async def append_session_messages(self, agent_id: UUID, *messages: Message) -> AgentSession:
-        """Append provider-neutral conversation messages to an Agent session."""
-        async with self._lock:
-            self._registry.get(agent_id)
-            session = self._sessions[agent_id].with_messages(*messages)
-            self._sessions[agent_id] = session
+        Policy: CREATED and STOPPED Agents come back as they were. Every other Agent was
+        available when last stored (in-flight turns are never persisted), so it is
+        restored as CREATED and re-initialized through the normal lifecycle. If that
+        fails the Agent stays CREATED, keeps its definition and sessions, and can be
+        initialized again later.
+        """
+        restored: list[Agent] = []
+        for stored in await self._registry.stored_agents():
+            agent = stored if stored.status in {AgentStatus.CREATED, AgentStatus.STOPPED} else replace(stored, status=AgentStatus.CREATED)
+            self._registry.restore(agent)
+            latest = await self._sessions.latest_for_agent(agent.id)
+            self._contexts[agent.id] = AgentContext(
+                current_state=agent.status,
+                **({} if latest is None else {"session_id": latest.id}),
+            )
+            if stored.status not in {AgentStatus.CREATED, AgentStatus.STOPPED}:
+                try:
+                    agent = await self.initialize_agent(agent.id)
+                except Exception as error:
+                    logger.error(
+                        "Agent could not be re-initialized during restoration",
+                        extra={"genesis_context": {"agent_id": str(agent.id), "error_type": type(error).__name__}},
+                    )
+                    agent = self._registry.get(agent.id)
+            await self._event_bus.publish(
+                AgentRestored(source="agent_manager", payload={"agent_id": str(agent.id), "status": agent.status.value})
+            )
+            restored.append(agent)
+        return tuple(restored)
+
+    async def get_session(self, agent_id: UUID, session_id: UUID | None = None) -> AgentSession:
+        """Return one of the Agent's sessions, defaulting to its active session.
+
+        An explicit ``session_id`` must belong to this Agent. Without one, the active
+        session is used; if it does not exist yet a new one is started.
+        """
+        self._registry.get(agent_id)
+        target = session_id if session_id is not None else self._active_session_id(agent_id)
+        session = None if target is None else await self._sessions.get(target)
+        if session is not None and session.agent_id == agent_id:
             return session
+        if session_id is not None:
+            raise SessionNotFoundError(session_id)
+        return await self._create_session(agent_id)
+
+    async def list_sessions(self, agent_id: UUID) -> tuple[AgentSessionSummary, ...]:
+        """Return the Agent's sessions, most recently active first."""
+        self._registry.get(agent_id)
+        return await self._sessions.list_for_agent(agent_id)
+
+    async def start_session(self, agent_id: UUID) -> AgentSession:
+        """Start a fresh conversation and make it the Agent's active session."""
+        if self._registry.get(agent_id).status is AgentStatus.STOPPED:
+            raise AgentUnavailableError("This Agent is stopped and can no longer chat.")
+        return await self._create_session(agent_id)
+
+    async def append_session_messages(
+        self, agent_id: UUID, session_id: UUID, *messages: Message, expected_length: int
+    ) -> AgentSession:
+        """Atomically store one completed turn and make its session the active one."""
+        self._registry.get(agent_id)
+        session = await self._sessions.append(session_id, messages, expected_length=expected_length)
+        self._set_active_session(agent_id, session.id)
+        return session
+
+    async def _create_session(self, agent_id: UUID) -> AgentSession:
+        session = await self._sessions.create(AgentSession(agent_id=agent_id))
+        self._set_active_session(agent_id, session.id)
+        await self._event_bus.publish(
+            SessionCreated(source="agent_manager", payload={"agent_id": str(agent_id), "session_id": str(session.id)})
+        )
+        return session
+
+    def active_session_id(self, agent_id: UUID) -> UUID | None:
+        """The session chat continues by default (it may not be stored yet)."""
+        return self._active_session_id(agent_id)
+
+    def _active_session_id(self, agent_id: UUID) -> UUID | None:
+        context = self._contexts.get(agent_id)
+        return None if context is None else context.session_id
+
+    def _set_active_session(self, agent_id: UUID, session_id: UUID) -> None:
+        context = self._contexts.get(agent_id)
+        if context is not None and context.session_id != session_id:
+            self._contexts[agent_id] = replace(context, session_id=session_id)
 
     async def update_context(
         self,

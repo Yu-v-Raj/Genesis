@@ -43,3 +43,10 @@ class AgentConfigurationError(AgentRegistryError):
     def __init__(self, field: str, message: str) -> None:
         super().__init__(message)
         self.field = field
+
+
+class SessionNotFoundError(AgentRegistryError):
+    """Raised when a session does not exist or belongs to a different Agent."""
+
+    def __init__(self, session_id: UUID) -> None:
+        super().__init__(f"Session '{session_id}' was not found for this Agent.")

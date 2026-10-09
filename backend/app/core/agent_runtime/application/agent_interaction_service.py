@@ -12,6 +12,7 @@ from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError, AgentUnavailableError
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.agent_runtime.domain.interaction import InteractionSummary, ToolActivity
+from backend.app.core.agent_runtime.domain.session import AgentSession
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError
 from backend.app.core.llm_runtime.domain.models import (
@@ -50,12 +51,14 @@ class AgentInteractionService:
         self._tool_manager = tool_manager
         self._max_tool_iterations = max_tool_iterations
 
-    async def chat(self, agent_id: UUID, message: str) -> tuple[Agent, LLMResponse]:
+    async def chat(self, agent_id: UUID, message: str, session_id: UUID | None = None) -> tuple[Agent, LLMResponse]:
         """Run an interaction while preserving the established two-value contract."""
-        agent, response, _ = await self.chat_with_summary(agent_id, message)
+        agent, response, _ = await self.chat_with_summary(agent_id, message, session_id)
         return agent, response
 
-    async def chat_with_summary(self, agent_id: UUID, message: str) -> tuple[Agent, LLMResponse, InteractionSummary]:
+    async def chat_with_summary(
+        self, agent_id: UUID, message: str, session_id: UUID | None = None
+    ) -> tuple[Agent, LLMResponse, InteractionSummary]:
         """Run one IDLE Agent interaction and return its terminal record and LLM response.
 
         The turn's messages are committed to the session only when the interaction ends
@@ -68,7 +71,7 @@ class AgentInteractionService:
             raise LLMConfigurationError("This Agent has no model configured. Choose a model in its settings.")
         _require_available(agent)
         context = await self._agent_manager.get_context(agent_id)
-        session = await self._agent_manager.get_session(agent_id)
+        session = await self._agent_manager.get_session(agent_id, session_id)
         system_messages = self._context_assembler.system_messages(agent)
         turn = [
             _tagged(item, interaction_id)
@@ -91,11 +94,15 @@ class AgentInteractionService:
                 )
                 turn.append(_tagged(self._assistant_tool_call_message(response), interaction_id))
                 if not response.tool_calls:
-                    await self._agent_manager.append_session_messages(agent_id, *turn)
+                    await self._commit_turn(agent_id, session, turn)
                     return (
                         await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id),
                         response,
-                        InteractionSummary(interaction_id=interaction_id, tool_activities=tuple(activities)),
+                        InteractionSummary(
+                            interaction_id=interaction_id,
+                            session_id=session.id,
+                            tool_activities=tuple(activities),
+                        ),
                     )
                 for tool_call in response.tool_calls:
                     tool_message, activity = await self._tool_result_message(agent, tool_call, interaction_id)
@@ -109,14 +116,20 @@ class AgentInteractionService:
                 metadata={"tool_iteration_limit": self._max_tool_iterations},
             )
             turn.append(_tagged(self._assistant_tool_call_message(limit_response), interaction_id))
-            await self._agent_manager.append_session_messages(agent_id, *turn)
+            await self._commit_turn(agent_id, session, turn)
         except Exception:
             await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id)
             raise
         return (
             await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id),
             limit_response,
-            InteractionSummary(interaction_id=interaction_id, tool_activities=tuple(activities)),
+            InteractionSummary(interaction_id=interaction_id, session_id=session.id, tool_activities=tuple(activities)),
+        )
+
+    async def _commit_turn(self, agent_id: UUID, session: AgentSession, turn: list[Message]) -> None:
+        """Store the whole turn at once, only if nothing else extended the session meanwhile."""
+        await self._agent_manager.append_session_messages(
+            agent_id, session.id, *turn, expected_length=len(session.messages)
         )
 
     def _tool_definitions(self, agent: Agent) -> tuple[ToolDefinition, ...]:

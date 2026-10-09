@@ -52,14 +52,20 @@ in the session or emitted in events.
 
 ## Sessions
 
-Each chat turn's messages (user, assistant tool calls, tool results, final reply) are
-committed to the Agent's in-memory session only when the turn ends normally, so failed
-requests leave no partial history. Every message records its `interaction_id`; tool
-results record `tool_name` and `tool_status`. `GET /api/agents/{id}/session` returns
-these display fields but never tool-call arguments or provider metadata.
+An Agent has any number of conversation sessions; chat continues the active (most
+recently used) one unless a `session_id` is passed, and `POST /api/agents/{id}/sessions`
+starts a new one. Each completed turn (user message, assistant tool calls, tool results,
+final reply) is stored atomically when the turn ends, so failed requests leave no partial
+history. Every message records its `interaction_id`; tool results record `tool_name` and
+`tool_status`. The session endpoints return these display fields but never tool-call
+arguments or provider metadata.
 
-Agents, sessions, and configuration are held in memory and are lost when the backend
-restarts.
+## Persistence and restoration (v0.11)
+
+Agent definitions and sessions are stored in the database (`docs/20-Agent-Persistence.md`).
+Status is stored only as a restoration category (`created`, `idle`, `stopped`); at startup
+`AgentManager.restore_agents()` brings `idle` Agents back through
+`CREATED -> INITIALIZING -> IDLE`, so no Agent is ever restored as `RUNNING`.
 
 ## Runtime Context
 
