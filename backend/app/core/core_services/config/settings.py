@@ -7,6 +7,7 @@ from backend.app.core.core_services.config.constants import (
     DEFAULT_APP_DESCRIPTION,
     DEFAULT_APP_NAME,
     DEFAULT_APP_VERSION,
+    DEFAULT_CORS_ORIGINS,
     DEFAULT_DATABASE_URL,
     DEFAULT_ENVIRONMENT,
     DEFAULT_EVENT_HISTORY_SIZE,
@@ -15,6 +16,7 @@ from backend.app.core.core_services.config.constants import (
     DEFAULT_LOG_LEVEL,
     DEFAULT_PORT,
     ENV_FILE,
+    LOCAL_DEVELOPMENT_ORIGIN_REGEX,
 )
 
 
@@ -39,6 +41,7 @@ class Settings(BaseSettings):
         default=DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
         gt=0,
     )
+    CORS_ORIGINS: list[str] = Field(default_factory=lambda: list(DEFAULT_CORS_ORIGINS))
     DATABASE_URL: str = DEFAULT_DATABASE_URL
     OPENAI_API_KEY: SecretStr | None = None
     OPENAI_MODEL: str = "gpt-4.1-mini"
@@ -47,6 +50,11 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.6-flash"
     GEMINI_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)
     ANTHROPIC_API_KEY: SecretStr | None = None
+
+    @property
+    def cors_origin_regex(self) -> str | None:
+        """Allow any loopback frontend port only while developing locally."""
+        return LOCAL_DEVELOPMENT_ORIGIN_REGEX if self.ENVIRONMENT == "development" else None
 
 
 settings = Settings()
