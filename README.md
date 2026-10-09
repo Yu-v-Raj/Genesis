@@ -564,8 +564,12 @@ GEMINI_TIMEOUT_SECONDS=30
 
 ## 3. Install backend dependencies
 
+Requires Python 3.12+.
+
 ```bash
-python -m pip install -e .
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 ```
 
 ## 4. Start the backend
@@ -573,6 +577,9 @@ python -m pip install -e .
 ```bash
 python -m uvicorn backend.app.main:app --reload
 ```
+
+Agents, sessions, and memory are held in memory: restarting the backend (including
+`--reload` after a code change) clears them.
 
 Backend:
 
@@ -588,11 +595,28 @@ http://127.0.0.1:8000/docs
 
 ## 5. Start the frontend
 
-From `frontend`:
+From `frontend` (Node 22+; the committed `package-lock.json` is the source of truth):
 
 ```bash
-npm install
+npm ci
 npm run dev
+```
+
+If port 3000 is busy, Next.js uses 3001; in development the backend accepts any
+localhost port.
+
+## 6. Create an Agent and chat
+
+Open **Agents → Create Agent**, pick a model marked *Ready* (it needs that provider's
+API key in `.env`), allow the calculator, and ask "Calculate 25 * 4".
+
+## 7. Run the checks
+
+```bash
+python -m pytest backend -q
+npm --prefix frontend test
+npm --prefix frontend run lint
+npm --prefix frontend run build
 ```
 
 Frontend:

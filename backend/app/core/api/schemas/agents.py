@@ -5,13 +5,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from backend.app.core.agent_runtime.domain.agent import Agent
+from backend.app.core.agent_runtime.domain.agent import MAX_INSTRUCTIONS_LENGTH, Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext
 from backend.app.core.agent_runtime.domain.interaction import InteractionSummary
 from backend.app.core.agent_runtime.domain.session import AgentSession
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.api.schemas.llm import GenerateResponse, ModelRequest, ModelResponse
-from backend.app.core.llm_runtime.domain.models import LLMModel, LLMResponse
+from backend.app.core.llm_runtime.domain.models import LLMModel, LLMResponse, Message, ToolCall
 
 
 class AgentResponse(BaseModel):
@@ -28,6 +28,7 @@ class AgentResponse(BaseModel):
     tags: list[str]
     llm_model: ModelResponse | None
     allowed_tools: list[str]
+    instructions: str
 
     @classmethod
     def from_agent(cls, agent: Agent) -> "AgentResponse":
@@ -44,6 +45,7 @@ class AgentResponse(BaseModel):
             tags=list(agent.tags),
             llm_model=(None if agent.llm_model is None else ModelResponse.from_domain(agent.llm_model)),
             allowed_tools=list(agent.allowed_tools),
+            instructions=agent.instructions,
         )
 
 
@@ -70,9 +72,24 @@ class AgentCreateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     llm_model: ModelRequest | None = None
     allowed_tools: list[str] | None = None
+    instructions: str = Field(default="", max_length=MAX_INSTRUCTIONS_LENGTH)
+    initialize: bool = Field(
+        default=False, description="Initialize the Agent immediately so it is ready to chat."
+    )
 
     def llm_model_domain(self) -> LLMModel | None:
         return None if self.llm_model is None else self.llm_model.to_domain()
+
+
+class AgentConfigurationUpdateRequest(BaseModel):
+    """Partial update of an Agent's model, tool permissions, and instructions.
+
+    Omitted fields are unchanged; ``llm_model: null`` removes the model.
+    """
+
+    llm_model: ModelRequest | None = None
+    allowed_tools: list[str] | None = None
+    instructions: str | None = Field(default=None, max_length=MAX_INSTRUCTIONS_LENGTH)
 
 
 class AgentMetadataUpdateRequest(BaseModel):
@@ -141,11 +158,43 @@ class ToolActivityResponse(BaseModel):
         return cls(**{name: getattr(activity, name) for name in ("tool_name", "status", "result", "error", "duration")})
 
 
+class SessionMessageResponse(BaseModel):
+    """One conversation message with only display-safe tool details.
+
+    Tool-call arguments and provider metadata (such as Gemini thought signatures) stay
+    server-side; the UI gets tool names and outcomes.
+    """
+
+    role: str
+    content: str
+    interaction_id: str | None = None
+    tool_name: str | None = None
+    tool_status: str | None = None
+    tool_calls: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_domain(cls, message: Message) -> "SessionMessageResponse":
+        metadata = message.metadata
+        tool_calls = metadata.get("tool_calls") or ()
+        return cls(
+            role=message.role.value,
+            content=message.content,
+            interaction_id=_optional_str(metadata.get("interaction_id")),
+            tool_name=_optional_str(metadata.get("tool_name")),
+            tool_status=_optional_str(metadata.get("tool_status")),
+            tool_calls=[call.name for call in tool_calls if isinstance(call, ToolCall)],
+        )
+
+
 class AgentSessionResponse(BaseModel):
     id: UUID
     agent_id: UUID
-    messages: list[dict[str, object]]
+    messages: list[SessionMessageResponse]
 
     @classmethod
     def from_domain(cls, session: AgentSession) -> "AgentSessionResponse":
-        return cls(id=session.id, agent_id=session.agent_id, messages=[{"role": message.role.value, "content": message.content} for message in session.messages])
+        return cls(id=session.id, agent_id=session.agent_id, messages=[SessionMessageResponse.from_domain(message) for message in session.messages])
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None

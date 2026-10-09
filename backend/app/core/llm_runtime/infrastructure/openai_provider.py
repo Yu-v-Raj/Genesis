@@ -28,7 +28,7 @@ class OpenAIProvider(LLMProvider):
         return "openai"
 
     def models(self) -> tuple[LLMModel, ...]:
-        return (LLMModel(provider=self.name, model_name=self._model, capabilities=frozenset({"chat"}), metadata={"configured": True}),)
+        return (LLMModel(provider=self.name, model_name=self._model, capabilities=frozenset({"chat"}), metadata={"configured": self._api_key is not None}),)
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         if not self._api_key:

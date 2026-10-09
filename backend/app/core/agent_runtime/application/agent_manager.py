@@ -7,7 +7,7 @@ from uuid import UUID
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.context import AgentContext, UNSET
-from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError
+from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError, AgentUnavailableError
 from backend.app.core.agent_runtime.domain.session import AgentSession
 from backend.app.core.observability.domain.events import ToolRejected
 from backend.app.core.agent_runtime.domain.status import AgentStatus
@@ -49,6 +49,8 @@ class AgentManager:
         AgentStatus.STOPPED: set(),
     }
 
+    _CONFIGURABLE_STATES = frozenset({AgentStatus.CREATED, AgentStatus.IDLE})
+
     def __init__(self, registry: AgentRegistry, event_bus: EventBus) -> None:
         self._registry = registry
         self._event_bus = event_bus
@@ -67,6 +69,7 @@ class AgentManager:
         tags: tuple[str, ...] = (),
         llm_model: LLMModel | None = None,
         allowed_tools: tuple[str, ...] | None = None,
+        instructions: str = "",
     ) -> Agent:
         """Create an Agent record and its ephemeral runtime context."""
         agent = Agent(
@@ -78,6 +81,7 @@ class AgentManager:
             tags=tags,
             llm_model=llm_model,
             **({} if allowed_tools is None else {"allowed_tools": allowed_tools}),
+            instructions=instructions,
         )
         async with self._lock:
             await self._registry.register(agent)
@@ -132,8 +136,41 @@ class AgentManager:
         return await self._transition(agent_id, AgentStatus.COMPLETED, AgentCompleted)
 
     async def finish_interaction(self, agent_id: UUID, *, interaction_id: UUID | None = None) -> Agent:
-        """Return a normally completed or failed interaction to availability."""
-        return await self._transition(agent_id, AgentStatus.IDLE, None, interaction_id)
+        """Return a normally completed or failed interaction to availability.
+
+        If the Agent left RUNNING while the interaction was in flight (for example it was
+        stopped), its newer state wins and is returned unchanged.
+        """
+        async with self._lock:
+            agent = self._registry.get(agent_id)
+            if agent.status is not AgentStatus.RUNNING:
+                return agent
+            updated_agent = await self._registry.update_status(
+                agent_id, AgentStatus.IDLE, interaction_id=interaction_id
+            )
+            self._contexts[agent_id] = self._contexts[agent_id].with_state(AgentStatus.IDLE)
+            return updated_agent
+
+    async def update_configuration(
+        self,
+        agent_id: UUID,
+        *,
+        llm_model: LLMModel | None,
+        allowed_tools: tuple[str, ...],
+        instructions: str,
+    ) -> Agent:
+        """Replace an Agent's configuration while it is not handling an interaction."""
+        async with self._lock:
+            agent = self._registry.get(agent_id)
+            if agent.status not in self._CONFIGURABLE_STATES:
+                raise AgentUnavailableError(
+                    "Agents can only be reconfigured while they are not working or stopped."
+                )
+            return await self._registry.update_configuration(
+                agent.with_configuration(
+                    llm_model=llm_model, allowed_tools=allowed_tools, instructions=instructions
+                )
+            )
 
     async def publish_tool_rejected(
         self, *, agent_id: UUID, interaction_id: UUID, tool_name: str, category: str

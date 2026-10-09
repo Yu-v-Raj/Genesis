@@ -12,6 +12,7 @@ from backend.app.core.agent_runtime.domain.exceptions import (
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.observability.domain.events import (
+    AgentConfigurationUpdated,
     AgentMetadataUpdated,
     AgentRegistered,
     AgentRemoved,
@@ -100,6 +101,25 @@ class AgentRegistry:
             )
         )
         return updated_agent
+
+    async def update_configuration(self, agent: Agent) -> Agent:
+        """Store a reconfigured Agent record and publish which fields changed."""
+        with self._lock:
+            current_agent = self.get(agent.id)
+            self._agents[agent.id] = agent
+        changed = [
+            name
+            for name in ("llm_model", "allowed_tools", "instructions")
+            if getattr(current_agent, name) != getattr(agent, name)
+        ]
+        # Instructions are user-authored prompt text, so events carry field names only.
+        await self._event_bus.publish(
+            AgentConfigurationUpdated(
+                source="agent_registry",
+                payload={"agent_id": str(agent.id), "changed": changed},
+            )
+        )
+        return agent
 
     async def update_metadata(self, agent_id: UUID, metadata: Mapping[str, object]) -> Agent:
         """Merge Agent metadata, store the new record, and publish the update."""

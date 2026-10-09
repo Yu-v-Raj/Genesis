@@ -9,7 +9,7 @@ from backend.app.core.api.dependencies.system import (
     get_plugin_manager,
     get_runtime_manager,
     get_service_registry,
-    get_tool_manager,
+    get_tool_runtime_manager,
     get_workflow_engine,
 )
 from backend.app.core.api.schemas.system import (
@@ -31,7 +31,7 @@ from backend.app.core.core_services.config.settings import settings
 from backend.app.core.memory.application.memory_manager import MemoryManager
 from backend.app.core.plugin_system.application.plugin_manager import PluginManager
 from backend.app.core.runtime.application.lifecycle_manager import RuntimeLifecycleManager
-from backend.app.core.tool_manager.application.tool_manager import ToolManager
+from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.workflow_engine.application.workflow_engine import WorkflowEngine
 
 
@@ -46,11 +46,6 @@ SERVICE_METADATA = {
     "RuntimeLifecycleManager": "Controls the Genesis runtime lifecycle.",
     "AgentRegistry": "Tracks Agent Runtime metadata.",
     "AgentManager": "Coordinates Agent Runtime lifecycle and context.",
-}
-
-TOOL_DEFAULT = {
-    "description": "Genesis tool.",
-    "status": "online",
 }
 
 PLUGIN_DEFAULT = {
@@ -107,19 +102,19 @@ async def system_services(
 
 @router.get("/tools", response_model=SystemToolsResponse)
 async def system_tools(
-    tool_manager: ToolManager = Depends(get_tool_manager),
+    tool_manager: ToolRuntimeManager = Depends(get_tool_runtime_manager),
 ) -> SystemToolsResponse:
-    """Return names of currently registered tools."""
+    """Return the tools registered with the Tool Runtime that Agents actually use."""
     return SystemToolsResponse(
-    tools=[
-        ToolInfo(
-            name=name,
-            description=TOOL_DEFAULT["description"],
-            status=TOOL_DEFAULT["status"],
-        )
-        for name in tool_manager.registered_names()
-    ]
-)
+        tools=[
+            ToolInfo(
+                name=tool.name,
+                description=tool.definition.description,
+                status="online" if tool.definition.enabled else "disabled",
+            )
+            for tool in tool_manager.list_tools()
+        ]
+    )
 
 
 @router.get("/plugins", response_model=SystemPluginsResponse)

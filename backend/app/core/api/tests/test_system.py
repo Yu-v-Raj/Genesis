@@ -46,6 +46,7 @@ def test_system_services_returns_registered_core_services(client: TestClient) ->
         "AgentRegistry",
         "AgentManager",
         "AgentInteractionService",
+        "AgentConfigurationService",
         "ExecutionHistory",
         "ExecutionExecutor",
         "ExecutionManager",
@@ -71,7 +72,6 @@ def test_system_services_returns_registered_core_services(client: TestClient) ->
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
-        ("/api/system/tools", {"tools": []}),
         ("/api/system/plugins", {"plugins": []}),
         ("/api/system/memory", {"providers": []}),
         ("/api/system/workflows", {"workflows": []}),
@@ -87,3 +87,13 @@ def test_system_manager_endpoints_return_live_empty_registries(
 
     assert response.status_code == 200
     assert response.json() == expected
+
+
+def test_system_tools_reports_the_live_tool_runtime(client: TestClient) -> None:
+    """Regression: the endpoint used to read the unused legacy registry and report no tools."""
+    response = client.get("/api/system/tools")
+
+    assert response.status_code == 200
+    tools = response.json()["tools"]
+    assert [tool["name"] for tool in tools] == ["echo", "calculator", "uuid", "random_number", "delay"]
+    assert all(tool["status"] == "online" and tool["description"] for tool in tools)

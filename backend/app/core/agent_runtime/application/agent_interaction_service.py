@@ -1,6 +1,7 @@
 """Bounded Agent coordination across the LLM and Tool runtimes."""
 
 import json
+from dataclasses import replace
 from uuid import UUID, uuid4
 
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
@@ -8,6 +9,8 @@ from backend.app.core.agent_runtime.application.agent_registry import AgentRegis
 from backend.app.core.agent_runtime.application.context_assembler import AgentContextAssembler
 from backend.app.core.agent_runtime.application.tool_safety_gate import ToolSafetyGate
 from backend.app.core.agent_runtime.domain.agent import Agent
+from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError, AgentUnavailableError
+from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.agent_runtime.domain.interaction import InteractionSummary, ToolActivity
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError
@@ -53,57 +56,66 @@ class AgentInteractionService:
         return agent, response
 
     async def chat_with_summary(self, agent_id: UUID, message: str) -> tuple[Agent, LLMResponse, InteractionSummary]:
-        """Run one IDLE Agent interaction and return its terminal record and LLM response."""
+        """Run one IDLE Agent interaction and return its terminal record and LLM response.
+
+        The turn's messages are committed to the session only when the interaction ends
+        normally, so a failed request never leaves half a turn in the conversation.
+        """
         agent = self._agent_registry.get(agent_id)
         interaction_id = uuid4()
         activities: list[ToolActivity] = []
         if agent.llm_model is None:
-            raise LLMConfigurationError("Agent has no configured LLM model.")
+            raise LLMConfigurationError("This Agent has no model configured. Choose a model in its settings.")
+        _require_available(agent)
         context = await self._agent_manager.get_context(agent_id)
         session = await self._agent_manager.get_session(agent_id)
-        current_messages = self._context_assembler.assemble(agent, context, message)
-        messages = [*session.messages, *current_messages]
+        system_messages = self._context_assembler.system_messages(agent)
+        turn = [
+            _tagged(item, interaction_id)
+            for item in self._context_assembler.assemble(agent, context, message)
+        ]
         tools = self._tool_definitions(agent)
-        await self._agent_manager.start_agent(agent_id, interaction_id=interaction_id)
-        await self._agent_manager.append_session_messages(agent_id, *current_messages)
+        try:
+            await self._agent_manager.start_agent(agent_id, interaction_id=interaction_id)
+        except AgentLifecycleError as error:
+            raise AgentUnavailableError(_BUSY_MESSAGE) from error
         try:
             for _ in range(self._max_tool_iterations):
                 response = await self._llm_manager.generate(
                     LLMRequest(
                         model=agent.llm_model,
-                        messages=tuple(messages),
+                        messages=(*system_messages, *session.messages, *turn),
                         tools=tools,
                         metadata={"agent_id": str(agent.id), "interaction_id": str(interaction_id)},
                     )
                 )
+                turn.append(_tagged(self._assistant_tool_call_message(response), interaction_id))
                 if not response.tool_calls:
-                    assistant_message = self._assistant_tool_call_message(response)
-                    await self._agent_manager.append_session_messages(agent_id, assistant_message)
+                    await self._agent_manager.append_session_messages(agent_id, *turn)
                     return (
                         await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id),
                         response,
                         InteractionSummary(interaction_id=interaction_id, tool_activities=tuple(activities)),
                     )
-                assistant_message = self._assistant_tool_call_message(response)
-                messages.append(assistant_message)
-                await self._agent_manager.append_session_messages(agent_id, assistant_message)
                 for tool_call in response.tool_calls:
                     tool_message, activity = await self._tool_result_message(agent, tool_call, interaction_id)
-                    messages.append(tool_message)
+                    turn.append(_tagged(tool_message, interaction_id))
                     activities.append(activity)
-                    await self._agent_manager.append_session_messages(agent_id, tool_message)
-        except Exception:
-            await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id)
-            raise
-        return (
-            await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id),
-            LLMResponse(
+            limit_response = LLMResponse(
                 content="Tool-call iteration limit reached.",
                 model=agent.llm_model,
                 finish_reason="tool_iteration_limit",
                 usage=response.usage,
                 metadata={"tool_iteration_limit": self._max_tool_iterations},
-            ),
+            )
+            turn.append(_tagged(self._assistant_tool_call_message(limit_response), interaction_id))
+            await self._agent_manager.append_session_messages(agent_id, *turn)
+        except Exception:
+            await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id)
+            raise
+        return (
+            await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id),
+            limit_response,
             InteractionSummary(interaction_id=interaction_id, tool_activities=tuple(activities)),
         )
 
@@ -186,5 +198,32 @@ class AgentInteractionService:
         return Message(
             role=MessageRole.TOOL,
             content=json.dumps(result.result),
-            metadata={"tool_call_id": tool_call.call_id, "tool_name": result.tool_name},
+            metadata={
+                "tool_call_id": tool_call.call_id,
+                "tool_name": result.tool_name,
+                "tool_status": activity.status,
+            },
         ), activity
+
+
+_BUSY_MESSAGE = "This Agent is already working on a request. Wait for it to finish, then try again."
+_UNAVAILABLE_MESSAGES = {
+    AgentStatus.RUNNING: _BUSY_MESSAGE,
+    AgentStatus.CREATED: "This Agent isn't ready yet. Initialize it before chatting.",
+    AgentStatus.INITIALIZING: "This Agent is still initializing. Try again in a moment.",
+    AgentStatus.STOPPED: "This Agent is stopped and can no longer chat.",
+}
+
+
+def _require_available(agent: Agent) -> None:
+    """Explain why a non-IDLE Agent cannot take a new message."""
+    if agent.status is AgentStatus.IDLE:
+        return
+    raise AgentUnavailableError(
+        _UNAVAILABLE_MESSAGES.get(agent.status, f"This Agent can't chat while it is {agent.status.value}.")
+    )
+
+
+def _tagged(message: Message, interaction_id: UUID) -> Message:
+    """Record which interaction produced a session message."""
+    return replace(message, metadata={**message.metadata, "interaction_id": str(interaction_id)})

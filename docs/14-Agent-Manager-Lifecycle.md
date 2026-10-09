@@ -2,10 +2,10 @@
 
 ## Purpose
 
-The `AgentManager` is the Phase B application service for creating Agent Runtime
-records, validating lifecycle transitions, and maintaining each agent's ephemeral
-`AgentContext`. It is application-agnostic and does not execute agents, tools,
-workflows, or LLM calls.
+The `AgentManager` creates Agent Runtime records, validates lifecycle transitions, and
+maintains each agent's ephemeral `AgentContext` and conversation session. LLM and tool
+coordination lives in `AgentInteractionService`; configuration validation lives in
+`AgentConfigurationService`.
 
 ## Boundaries
 
@@ -16,19 +16,50 @@ workflows, or LLM calls.
 
 ## Lifecycle
 
-```text
-CREATED -> INITIALIZING -> IDLE -> RUNNING
-                                   |-> WAITING -> RUNNING
-                                   |-> PAUSED  -> RUNNING
-                                   |-> COMPLETED
-                                   |-> FAILED
+Agents are long-lived and reusable (v0.10D). `RUNNING` means "an interaction is in
+progress" and is owned by `AgentInteractionService`, not by callers.
 
-Any state -> STOPPED
+```text
+CREATED -> INITIALIZING -> IDLE <-> RUNNING     (each chat turn: IDLE -> RUNNING -> IDLE)
+
+Any non-stopped state -> STOPPED                 (terminal)
 ```
 
-Invalid transitions raise `AgentLifecycleError`. `initialize_agent()` performs the
-short synchronous `CREATED -> INITIALIZING -> IDLE` sequence because initialization
-has no asynchronous execution work in this milestone.
+- `initialize_agent()` performs the synchronous `CREATED -> INITIALIZING -> IDLE`
+  sequence. `POST /api/agents` with `"initialize": true` does this in one call.
+- LLM failures, tool failures, safety rejections, and the tool-iteration limit return
+  the Agent to `IDLE`; they never fail the Agent.
+- `finish_interaction()` leaves an Agent unchanged if it left `RUNNING` mid-turn (for
+  example it was stopped), so a late response cannot undo a stop.
+- `POST /start`, `/pause`, `/resume` are retired and return `409`: entering `RUNNING`
+  without an interaction left Agents unable to chat. `PAUSED`, `WAITING`, `COMPLETED`,
+  and `FAILED` remain in the enum for compatibility but are not reachable through the API.
+
+Invalid transitions raise `AgentLifecycleError` (`409`). `AgentUnavailableError`, a
+subclass, carries a user-facing reason when a chat cannot start.
+
+## Configuration (v0.10E-B)
+
+An Agent's `llm_model`, `allowed_tools`, and `instructions` are validated by
+`AgentConfigurationService` against the live LLM and Tool runtimes before they are
+stored: the provider must be registered, the model must be one that provider offers,
+and every tool must be registered. A provider without an API key is accepted; its
+models report `metadata.configured: false` and chat returns `503` with the missing
+setting. `PATCH /api/agents/{id}/configuration` changes these fields while the Agent is
+`CREATED` or `IDLE` and publishes `agent.configuration_updated` with the changed field
+names only. `instructions` are sent as a system message each turn and are never stored
+in the session or emitted in events.
+
+## Sessions
+
+Each chat turn's messages (user, assistant tool calls, tool results, final reply) are
+committed to the Agent's in-memory session only when the turn ends normally, so failed
+requests leave no partial history. Every message records its `interaction_id`; tool
+results record `tool_name` and `tool_status`. `GET /api/agents/{id}/session` returns
+these display fields but never tool-call arguments or provider metadata.
+
+Agents, sessions, and configuration are held in memory and are lost when the backend
+restarts.
 
 ## Runtime Context
 
@@ -40,6 +71,8 @@ deleted.
 ## Observability and API
 
 The manager publishes `agent.created`, `agent.initialized`, `agent.started`,
+`agent.status_changed` (every transition, including the return to `IDLE` after a chat),
+`agent.configuration_updated`,
 `agent.paused`, `agent.resumed`, `agent.completed`, `agent.failed`, `agent.stopped`,
 `agent.deleted`, and `agent.context_updated` events. The REST adapter exposes
 creation, deletion, lifecycle controls, metadata updates, and context inspection and

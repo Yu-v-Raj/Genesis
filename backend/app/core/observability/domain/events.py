@@ -195,6 +195,13 @@ class AgentMetadataUpdated(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AgentConfigurationUpdated(Event):
+    """Published when an Agent's LLM, tool, or instruction configuration changes."""
+
+    event_type: str = field(init=False, default="agent.configuration_updated")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AgentCreated(Event):
     """Published when the Agent Manager creates a runtime record."""
 

@@ -28,3 +28,18 @@ class AgentLifecycleError(AgentRegistryError):
         super().__init__(
             f"Agent '{agent_id}' cannot transition from '{current_state}' to '{requested_state}'."
         )
+
+
+class AgentUnavailableError(AgentLifecycleError):
+    """Raised with a user-facing reason when an Agent cannot accept a request now."""
+
+    def __init__(self, message: str) -> None:
+        AgentRegistryError.__init__(self, message)
+
+
+class AgentConfigurationError(AgentRegistryError):
+    """Raised when an Agent's LLM or tool configuration is invalid."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
@@ -37,8 +37,23 @@ const navItems: NavItem[] = [
   { label: "Settings", icon: Settings },
 ];
 
+const NARROW_QUERY = "(max-width: 767px)";
+
+function subscribeToNarrow(onChange: () => void): () => void {
+  const query = window.matchMedia(NARROW_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+/** Collapse to icons on phones unless the user has toggled the sidebar themselves. */
+function useIsNarrow(): boolean {
+  return useSyncExternalStore(subscribeToNarrow, () => window.matchMedia(NARROW_QUERY).matches, () => false);
+}
+
 export function Sidebar() {
-  const [collapsed, setCollapsed] = useState(false);
+  const isNarrow = useIsNarrow();
+  const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null);
+  const collapsed = userCollapsed ?? isNarrow;
   const pathname = usePathname();
 
   return (
@@ -54,7 +69,7 @@ export function Sidebar() {
           </span>
         )}
         <button
-          onClick={() => setCollapsed((prev) => !prev)}
+          onClick={() => setUserCollapsed(!collapsed)}
           className="ml-auto flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
@@ -93,6 +108,7 @@ export function Sidebar() {
               href={item.href}
               className={className}
               title={collapsed ? item.label : undefined}
+              aria-label={collapsed ? item.label : undefined}
             >
               {content}
             </Link>
