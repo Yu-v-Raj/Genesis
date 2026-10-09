@@ -593,6 +593,14 @@ For a zero-setup local database you can use SQLite instead:
 DATABASE_URL=sqlite+aiosqlite:///./genesis.db
 ```
 
+Relative SQLite paths are resolved from the project root, so the backend, Alembic, and
+scripts use the same file whichever directory they start in. `*.db` files are git-ignored.
+
+`DATABASE_URL` is read from, in order of precedence: an exported environment variable,
+then `.env` in the project root, then the built-in default (local PostgreSQL). If the
+backend reports a different database than you expect, check `echo $DATABASE_URL` and that
+`.env` was saved.
+
 Then create or update the schema (run again after pulling new migrations):
 
 ```bash
