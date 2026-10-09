@@ -49,7 +49,7 @@ async def test_execution_completes_without_changing_agent_lifecycle() -> None:
 
     execution = await manager.execute(agent.id, metadata={"request": "test"})
     await asyncio.sleep(0.01)
-    completed = manager.get_execution(execution.execution_id)
+    completed = await manager.get_execution(execution.execution_id)
 
     assert completed.status is ExecutionStatus.COMPLETED
     assert completed.result is not None
@@ -86,7 +86,7 @@ async def test_execution_failure_is_recorded_and_published() -> None:
     execution = await manager.execute(agent.id)
     await asyncio.sleep(0.01)
 
-    failed = manager.get_execution(execution.execution_id)
+    failed = await manager.get_execution(execution.execution_id)
     assert failed.status is ExecutionStatus.FAILED
     assert failed.error == "deterministic failure"
     assert "execution.failed" in event_types
@@ -102,10 +102,10 @@ async def test_history_is_newest_first_and_bounded() -> None:
     second = await manager.create_execution(agent.id)
     third = await manager.create_execution(agent.id)
 
-    assert [item.execution_id for item in manager.list_executions()] == [third.execution_id, second.execution_id]
-    assert manager.list_executions(agent.id)[0].agent_id == agent.id
+    assert [item.execution_id for item in await manager.list_executions()] == [third.execution_id, second.execution_id]
+    assert (await manager.list_executions(agent.id))[0].agent_id == agent.id
     with pytest.raises(ExecutionNotFoundError):
-        manager.get_execution(first.execution_id)
+        await manager.get_execution(first.execution_id)
 
 
 @pytest.mark.asyncio

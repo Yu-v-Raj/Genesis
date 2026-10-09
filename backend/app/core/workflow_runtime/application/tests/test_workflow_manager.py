@@ -28,6 +28,7 @@ async def test_sequential_tasks_unlock_and_complete() -> None:
     assert complete.status is WorkflowStatus.COMPLETED
     assert [item.status for item in complete.tasks] == [WorkflowTaskStatus.COMPLETED, WorkflowTaskStatus.COMPLETED]
     assert complete.tasks[1].started_at >= complete.tasks[0].finished_at
+    await manager.shutdown()
 
 
 @pytest.mark.asyncio
@@ -38,6 +39,7 @@ async def test_parallel_dependencies_unlock_once() -> None:
     assert complete.status is WorkflowStatus.COMPLETED
     assert complete.tasks[-1].started_at >= complete.tasks[1].finished_at
     assert complete.tasks[-1].started_at >= complete.tasks[2].finished_at
+    await manager.shutdown()
 
 
 @pytest.mark.asyncio

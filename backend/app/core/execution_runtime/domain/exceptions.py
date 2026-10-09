@@ -28,3 +28,11 @@ class AgentNotExecutableError(ExecutionRuntimeError):
 
     def __init__(self, agent_id: UUID, reason: str) -> None:
         super().__init__(f"Agent '{agent_id}' cannot execute: {reason}.")
+
+
+class ExecutionRetryError(ExecutionRuntimeError):
+    """Raised when a retry is not allowed or needs the caller's explicit confirmation."""
+
+    def __init__(self, message: str, *, requires_acknowledgement: bool = False) -> None:
+        super().__init__(message)
+        self.requires_acknowledgement = requires_acknowledgement

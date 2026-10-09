@@ -6,13 +6,11 @@ credentials, or row contents.
 """
 
 from collections.abc import Sequence
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import AsyncIterator
 from uuid import UUID
 
 from sqlalchemy import delete, func, insert, select, update
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.app.core.agent_runtime.application.repositories import (
@@ -32,31 +30,9 @@ from backend.app.core.agent_runtime.infrastructure.message_codec import (
     message_from_columns,
 )
 from backend.app.core.agent_runtime.infrastructure.orm import AgentRow, MessageRow, SessionRow
-from backend.app.core.core_services.logging.logger import logger
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.llm_runtime.domain.models import LLMModel, Message, MessageRole
-
-
-_UNAVAILABLE = "Genesis storage is unavailable. Try again shortly."
-
-
-@asynccontextmanager
-async def _transaction(
-    factory: async_sessionmaker[AsyncSession], operation: str
-) -> AsyncIterator[AsyncSession]:
-    try:
-        async with factory() as session, session.begin():
-            yield session
-    except (PersistenceError, DuplicateAgentError):
-        raise
-    # Drivers raise some connection failures (refused, DNS, timeouts) as plain OSError
-    # rather than DBAPI errors, so they are translated here as well.
-    except (SQLAlchemyError, OSError, TimeoutError) as error:
-        logger.error(
-            "Persistence operation failed",
-            extra={"genesis_context": {"operation": operation, "error_type": type(error).__name__}},
-        )
-        raise PersistenceError(_UNAVAILABLE) from error
+from backend.app.database.transactions import persistence_transaction
 
 
 class SqlAlchemyAgentRepository(AgentRepository):
@@ -68,7 +44,7 @@ class SqlAlchemyAgentRepository(AgentRepository):
 
     async def add(self, agent: Agent) -> None:
         try:
-            async with _transaction(self._factory, "agent.add") as session:
+            async with persistence_transaction(self._factory, "agent.add") as session:
                 await session.execute(insert(AgentRow).values(**_agent_columns(agent), version=1))
         except PersistenceError as error:
             if isinstance(error.__cause__, IntegrityError):
@@ -78,7 +54,7 @@ class SqlAlchemyAgentRepository(AgentRepository):
 
     async def save(self, agent: Agent) -> None:
         expected = self._versions.get(agent.id)
-        async with _transaction(self._factory, "agent.save") as session:
+        async with persistence_transaction(self._factory, "agent.save") as session:
             if expected is None:
                 expected = await session.scalar(select(AgentRow.version).where(AgentRow.id == agent.id))
                 if expected is None:
@@ -95,12 +71,12 @@ class SqlAlchemyAgentRepository(AgentRepository):
         self._versions[agent.id] = expected + 1
 
     async def delete(self, agent_id: UUID) -> None:
-        async with _transaction(self._factory, "agent.delete") as session:
+        async with persistence_transaction(self._factory, "agent.delete") as session:
             await session.execute(delete(AgentRow).where(AgentRow.id == agent_id))
         self._versions.pop(agent_id, None)
 
     async def list(self) -> tuple[Agent, ...]:
-        async with _transaction(self._factory, "agent.list") as session:
+        async with persistence_transaction(self._factory, "agent.list") as session:
             rows = (await session.scalars(select(AgentRow).order_by(AgentRow.created_at, AgentRow.id))).all()
         self._versions.update({row.id: row.version for row in rows})
         return tuple(_agent_from_row(row) for row in rows)
@@ -113,7 +89,7 @@ class SqlAlchemySessionRepository(SessionRepository):
     async def create(self, session: AgentSession) -> AgentSession:
         if session.messages:
             raise ValueError("Sessions are created empty; messages are appended per turn.")
-        async with _transaction(self._factory, "session.create") as db:
+        async with persistence_transaction(self._factory, "session.create") as db:
             await db.execute(
                 insert(SessionRow).values(
                     id=session.id,
@@ -127,7 +103,7 @@ class SqlAlchemySessionRepository(SessionRepository):
         return session
 
     async def get(self, session_id: UUID) -> AgentSession | None:
-        async with _transaction(self._factory, "session.get") as db:
+        async with persistence_transaction(self._factory, "session.get") as db:
             row = await db.get(SessionRow, session_id)
             if row is None:
                 return None
@@ -139,7 +115,7 @@ class SqlAlchemySessionRepository(SessionRepository):
         return _session_from_rows(row, messages)
 
     async def latest_for_agent(self, agent_id: UUID) -> AgentSession | None:
-        async with _transaction(self._factory, "session.latest") as db:
+        async with persistence_transaction(self._factory, "session.latest") as db:
             session_id = await db.scalar(
                 select(SessionRow.id)
                 .where(SessionRow.agent_id == agent_id)
@@ -149,7 +125,7 @@ class SqlAlchemySessionRepository(SessionRepository):
         return None if session_id is None else await self.get(session_id)
 
     async def list_for_agent(self, agent_id: UUID) -> tuple[AgentSessionSummary, ...]:
-        async with _transaction(self._factory, "session.list") as db:
+        async with persistence_transaction(self._factory, "session.list") as db:
             rows = (
                 await db.scalars(
                     select(SessionRow)
@@ -175,7 +151,7 @@ class SqlAlchemySessionRepository(SessionRepository):
         now = datetime.now(UTC)
         first_user = next((m.content for m in messages if m.role is MessageRole.USER), None)
         try:
-            async with _transaction(self._factory, "session.append") as db:
+            async with persistence_transaction(self._factory, "session.append") as db:
                 # Compare-and-set on message_count: only the writer that saw the current
                 # length may extend the session, and all of its rows land or none do.
                 result = await db.execute(
@@ -219,7 +195,7 @@ class SqlAlchemySessionRepository(SessionRepository):
         return stored
 
     async def delete_for_agent(self, agent_id: UUID) -> None:
-        async with _transaction(self._factory, "session.delete_for_agent") as db:
+        async with persistence_transaction(self._factory, "session.delete_for_agent") as db:
             await db.execute(delete(SessionRow).where(SessionRow.agent_id == agent_id))
 
 

@@ -18,6 +18,9 @@ class ToolMetadata:
     capabilities: tuple[ToolCapability, ...] = ()
     permissions: tuple[ToolPermission, ...] = (ToolPermission.NONE,)
     enabled: bool = True
+    # Whether a call may change something outside Genesis (send, write, pay, ...). Unknown
+    # tools are assumed to have side effects, so recovery never re-runs them blindly.
+    side_effects: bool = True
     parameters: Mapping[str, object] = field(
         default_factory=lambda: {"type": "object", "properties": {}}
     )

@@ -1,6 +1,7 @@
 """Deterministic placeholder executor for validating the execution pipeline."""
 
 import asyncio
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from backend.app.core.execution_runtime.domain.execution_context import ExecutionContext
@@ -21,6 +22,22 @@ class ExecutionExecutor:
     def set_tool_manager(self, tool_manager: "ToolRuntimeManager") -> None:
         """Attach the optional Tool Runtime submission boundary during bootstrap."""
         self._tool_manager = tool_manager
+
+    def may_have_side_effects(self, metadata: Mapping[str, object]) -> bool:
+        """Whether re-running this work could repeat an external effect.
+
+        The deterministic placeholder has none. Tool work defers to the tool's declared
+        ``side_effects``; an unknown or unregistered tool is assumed to have them.
+        """
+        tool_name = metadata.get("tool_name")
+        if not isinstance(tool_name, str):
+            return False
+        if self._tool_manager is None:
+            return True
+        try:
+            return self._tool_manager.get_tool(tool_name).definition.side_effects
+        except Exception:
+            return True
 
     async def execute(self, context: ExecutionContext) -> str:
         """Simulate deterministic work and return its fixed output."""

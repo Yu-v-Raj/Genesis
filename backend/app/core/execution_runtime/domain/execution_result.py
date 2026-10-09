@@ -19,7 +19,12 @@ class ExecutionResult:
 
     def __post_init__(self) -> None:
         """Freeze mutable values at the execution domain boundary."""
-        if self.status not in {ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.CANCELLED}:
+        if self.status not in {
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.INTERRUPTED,
+        }:
             raise ValueError("Execution result status must be terminal.")
         if self.duration is not None and self.duration < 0:
             raise ValueError("Execution result duration cannot be negative.")

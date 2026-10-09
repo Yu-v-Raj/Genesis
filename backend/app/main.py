@@ -23,8 +23,9 @@ from backend.app.core.core_services.persistence import PersistenceConflictError,
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.core_services.service_registry import ServiceRegistry
 from backend.app.core.execution_runtime.application.execution_executor import ExecutionExecutor
-from backend.app.core.execution_runtime.application.execution_history import ExecutionHistory
-from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager
+from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager, default_worker_id
+from backend.app.core.execution_runtime.application.repositories import ExecutionRepository
+from backend.app.core.execution_runtime.infrastructure.sqlalchemy_repository import SqlAlchemyExecutionRepository
 from backend.app.core.memory.application.memory_manager import MemoryManager
 from backend.app.core.memory.infrastructure.in_memory_provider import InMemoryProvider
 from backend.app.core.observability.application.heartbeat import HeartbeatService
@@ -45,7 +46,9 @@ from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeMa
 from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
 from backend.app.core.tool_runtime.domain.tool import builtin_tools
 from backend.app.core.workflow_engine.application.workflow_engine import WorkflowEngine
+from backend.app.core.workflow_runtime.application.repositories import WorkflowRepository
 from backend.app.core.workflow_runtime.application.workflow_manager import WorkflowManager
+from backend.app.core.workflow_runtime.infrastructure.sqlalchemy_repository import SqlAlchemyWorkflowRepository
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.application.provider_registry import LLMProviderRegistry
 from backend.app.core.llm_runtime.infrastructure.openai_provider import OpenAIProvider
@@ -74,10 +77,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     agent_manager = AgentManager(
         agent_registry, event_bus, SqlAlchemySessionRepository(session_factory)
     )
-    execution_history = ExecutionHistory()
+    worker_id = default_worker_id()
+    execution_repository = SqlAlchemyExecutionRepository(session_factory)
     execution_executor = ExecutionExecutor()
     execution_manager = ExecutionManager(
-        agent_registry, execution_executor, execution_history, event_bus
+        agent_registry,
+        execution_executor,
+        execution_repository,
+        event_bus,
+        worker_id=worker_id,
+        lease_seconds=settings.WORKER_LEASE_SECONDS,
+        concurrency=settings.WORKER_CONCURRENCY,
     )
     tool_manager = ToolManager()
     tool_registry = ToolRegistry(event_bus)
@@ -90,7 +100,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     memory_provider = InMemoryProvider()
     memory_manager = MemoryManager(memory_provider, event_bus)
     workflow_engine = WorkflowEngine(event_bus)
-    workflow_manager = WorkflowManager(tool_runtime_manager, event_bus)
+    workflow_repository = SqlAlchemyWorkflowRepository(session_factory)
+    workflow_manager = WorkflowManager(
+        tool_runtime_manager,
+        event_bus,
+        repository=workflow_repository,
+        worker_id=worker_id,
+        lease_seconds=settings.WORKER_LEASE_SECONDS,
+        concurrency=settings.WORKER_CONCURRENCY,
+    )
     llm_provider_registry = LLMProviderRegistry()
     llm_provider_registry.register(OpenAIProvider(settings))
     llm_provider_registry.register(GeminiProvider(settings))
@@ -121,7 +139,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(AgentManager, agent_manager)
     service_registry.register_singleton(AgentInteractionService, agent_interaction_service)
     service_registry.register_singleton(AgentConfigurationService, agent_configuration_service)
-    service_registry.register_singleton(ExecutionHistory, execution_history)
+    service_registry.register_singleton(ExecutionRepository, execution_repository)
     service_registry.register_singleton(ExecutionExecutor, execution_executor)
     service_registry.register_singleton(ExecutionManager, execution_manager)
     service_registry.register_singleton(LoggerService, logger_service)
@@ -133,6 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(MemoryManager, memory_manager)
     service_registry.register_singleton(InMemoryProvider, memory_provider)
     service_registry.register_singleton(WorkflowEngine, workflow_engine)
+    service_registry.register_singleton(WorkflowRepository, workflow_repository)
     service_registry.register_singleton(WorkflowManager, workflow_manager)
     service_registry.register_singleton(LLMProviderRegistry, llm_provider_registry)
     service_registry.register_singleton(LLMManager, llm_manager)
@@ -150,7 +169,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "AgentManager",
         "AgentInteractionService",
         "AgentConfigurationService",
-        "ExecutionHistory",
+        "ExecutionRepository",
         "ExecutionExecutor",
         "ExecutionManager",
         "LoggerService",
@@ -162,6 +181,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "MemoryManager",
         "InMemoryProvider",
         "WorkflowEngine",
+        "WorkflowRepository",
         "WorkflowManager",
         "LLMProviderRegistry",
         "LLMManager",
@@ -173,6 +193,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
     await agent_manager.restore_agents()
+    # Resolve work left by a previous process, then start claiming queued work.
+    await execution_manager.start()
+    await workflow_manager.start_worker()
     await runtime_manager.startup()
     await event_bus.publish(SystemStarted(source="runtime"))
     await logger_service.info("Genesis application startup", source="runtime")
@@ -180,6 +203,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await execution_manager.shutdown()
+        await workflow_manager.shutdown()
         await heartbeat_service.stop()
         await runtime_manager.shutdown()
         await event_bus.publish(SystemStopped(source="runtime"))
