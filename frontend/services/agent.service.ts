@@ -7,6 +7,7 @@ import type {
   LLMModelOption,
   AgentChatResponse,
   AgentSession,
+  AgentSessionList,
 } from "@/types/agents";
 import { requestJson } from "@/services/api-client";
 
@@ -68,8 +69,17 @@ export const AgentService = Object.freeze({
       (message, status) => new AgentApiError(message, status)
     ),
   getContext: (agentId: string): Promise<AgentContext> => request<AgentContext>(`/${agentId}/context`),
+  /** The Agent's active session (what chat continues by default). */
   getSession: (agentId: string): Promise<AgentSession> => request<AgentSession>(`/${agentId}/session`),
-  chat: (agentId: string, message: string): Promise<AgentChatResponse> => request<AgentChatResponse>(`/${agentId}/chat`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }),
-  }),
+  getSessionById: (agentId: string, sessionId: string): Promise<AgentSession> =>
+    request<AgentSession>(`/${agentId}/sessions/${sessionId}`),
+  listSessions: (agentId: string): Promise<AgentSessionList> => request<AgentSessionList>(`/${agentId}/sessions`),
+  startSession: (agentId: string): Promise<AgentSession> =>
+    request<AgentSession>(`/${agentId}/sessions`, { method: "POST" }),
+  chat: (agentId: string, message: string, sessionId?: string | null): Promise<AgentChatResponse> =>
+    request<AgentChatResponse>(`/${agentId}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sessionId ? { message, session_id: sessionId } : { message }),
+    }),
 });

@@ -15,6 +15,7 @@ const AGENT_EVENT_TYPES = new Set([
   // Interactions return Agents to IDLE with only a status change, so it must be tracked.
   "agent.status_changed",
   "agent.configuration_updated",
+  "agent.restored",
   "agent.initialized",
   "agent.started",
   "agent.paused",

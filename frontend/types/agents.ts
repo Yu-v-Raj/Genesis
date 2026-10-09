@@ -61,6 +61,7 @@ export interface AgentChatResponse {
   agent: Agent;
   response: { content: string | null; finish_reason: string | null };
   interaction_id: string;
+  session_id: string | null;
   tool_activities: ToolActivity[];
 }
 
@@ -72,7 +73,28 @@ export interface SessionMessage {
   tool_status: string | null;
   tool_calls: string[];
 }
-export interface AgentSession { id: string; agent_id: string; messages: SessionMessage[]; }
+export interface AgentSession {
+  id: string;
+  agent_id: string;
+  created_at: string;
+  updated_at: string;
+  messages: SessionMessage[];
+}
+
+/** A stored conversation, without its messages. */
+export interface AgentSessionSummary {
+  id: string;
+  agent_id: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  title: string | null;
+}
+
+export interface AgentSessionList {
+  active_session_id: string | null;
+  sessions: AgentSessionSummary[];
+}
 
 export interface AgentConfigurationInput {
   llm_model: LLMModelRef | null;

@@ -3,7 +3,7 @@
  * user-facing error explanations. Kept free of React and browser APIs so it can be
  * unit tested with `node --test`.
  */
-import type { Agent, LLMModelOption, LLMModelRef, SessionMessage } from "@/types/agents";
+import type { Agent, AgentSessionSummary, LLMModelOption, LLMModelRef, SessionMessage } from "@/types/agents";
 
 export type ReadinessState =
   | "ready"
@@ -190,4 +190,20 @@ export function describeChatError(status: number | undefined, detail: string): C
     default:
       return { title: "Something went wrong", message: detail, configure: false };
   }
+}
+
+/** A short, human label for a stored conversation in a picker. */
+export function sessionLabel(session: AgentSessionSummary, now: Date = new Date()): string {
+  const title = session.title ?? (session.message_count === 0 ? "New conversation" : "Conversation");
+  return `${title} · ${relativeDay(new Date(session.updated_at), now)}`;
+}
+
+function relativeDay(date: Date, now: Date): string {
+  if (Number.isNaN(date.getTime())) return "unknown date";
+  const startOfDay = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
+  if (days <= 0) return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days} days ago`;
+  return date.toLocaleDateString();
 }

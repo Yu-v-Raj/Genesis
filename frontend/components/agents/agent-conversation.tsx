@@ -2,23 +2,30 @@
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle, Bot, CheckCircle2, CircleStop, LoaderCircle, Send, Settings2, ShieldX, Wrench, X, XCircle,
+  AlertTriangle, Bot, CheckCircle2, CircleStop, LoaderCircle, MessageSquarePlus, Send, Settings2, ShieldX, Wrench, X, XCircle,
 } from "lucide-react";
 
 import {
-  formatToolValue, groupTurns, modelLabel, toolStepLabel,
+  formatToolValue, groupTurns, modelLabel, sessionLabel, toolStepLabel,
   type AgentReadiness, type ChatProblem, type ToolStep,
 } from "@/lib/agent-experience";
-import type { Agent, SessionMessage } from "@/types/agents";
+import type { Agent, AgentSessionSummary, SessionMessage } from "@/types/agents";
 
 interface AgentConversationProps {
   agent: Agent | null;
   readiness: AgentReadiness | null;
   messages: SessionMessage[];
+  sessionId: string | null;
+  sessions: AgentSessionSummary[];
+  loading: boolean;
+  switching: boolean;
   pendingMessage: string | null;
   problem: ChatProblem | null;
   loadError: string | null;
   onSend: (message: string) => Promise<unknown>;
+  onNewConversation: () => void;
+  onOpenSession: (sessionId: string) => void;
+  onRetryLoad: () => void;
   onConfigure: () => void;
   onInitialize: () => void;
   onDismissProblem: () => void;
@@ -70,7 +77,8 @@ function Bubble({ role, children }: { role: "user" | "assistant"; children: Reac
 }
 
 export function AgentConversation({
-  agent, readiness, messages, pendingMessage, problem, loadError, onSend, onConfigure, onInitialize, onDismissProblem,
+  agent, readiness, messages, sessionId, sessions, loading, switching, pendingMessage, problem, loadError,
+  onSend, onNewConversation, onOpenSession, onRetryLoad, onConfigure, onInitialize, onDismissProblem,
 }: AgentConversationProps) {
   const [input, setInput] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
@@ -128,6 +136,30 @@ export function AgentConversation({
         </button>
       </header>
 
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+        <label htmlFor="agent-session-picker" className="sr-only">Conversation</label>
+        <select
+          id="agent-session-picker"
+          value={sessionId ?? ""}
+          onChange={(event) => onOpenSession(event.target.value)}
+          disabled={pending || switching || sessions.length === 0}
+          className="min-w-0 flex-1 truncate rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60"
+        >
+          {sessionId !== null && !sessions.some((item) => item.id === sessionId) && <option value={sessionId}>Current conversation</option>}
+          {sessions.map((item) => <option key={item.id} value={item.id}>{sessionLabel(item)}</option>)}
+        </select>
+        <button
+          type="button"
+          onClick={onNewConversation}
+          disabled={pending || switching || agent.status === "stopped" || (messages.length === 0 && sessionId !== null)}
+          title={messages.length === 0 ? "This conversation is already empty" : undefined}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {switching ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <MessageSquarePlus className="h-3.5 w-3.5" aria-hidden="true" />}
+          New conversation
+        </button>
+      </div>
+
       {readiness && !readiness.canChat && readiness.state !== "working" && (
         <div role="status" className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2.5 text-sm text-amber-100">
           <span>{readiness.detail}</span>
@@ -140,8 +172,15 @@ export function AgentConversation({
       )}
 
       <div ref={logRef} role="log" aria-live="polite" aria-relevant="additions" className="flex-1 space-y-4 overflow-y-auto p-4">
-        {loadError && <p role="alert" className="text-sm text-red-200">{loadError}</p>}
-        {turns.length === 0 && !pending ? (
+        {loadError && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-400/25 bg-red-400/5 px-3 py-2 text-sm text-red-200">
+            <span>{loadError}</span>
+            <button type="button" onClick={onRetryLoad} className="rounded-md border border-red-300/30 px-2.5 py-1 text-xs font-medium hover:bg-red-300/10">Retry</button>
+          </div>
+        )}
+        {loading && turns.length === 0 && !loadError ? (
+          <p className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"><LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />Loading conversation…</p>
+        ) : turns.length === 0 && !pending ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 py-10 text-center">
             <p className="text-sm text-muted-foreground">No messages yet.</p>
             {readiness?.canChat && (

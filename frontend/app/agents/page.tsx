@@ -130,10 +130,17 @@ export default function AgentsPage() {
                         agent={selectedAgent}
                         readiness={selectedAgent ? readinessFor(selectedAgent) : null}
                         messages={conversation.messages}
+                        sessionId={conversation.sessionId}
+                        sessions={conversation.sessions}
+                        loading={conversation.loading}
+                        switching={conversation.switching}
                         pendingMessage={conversation.pendingMessage}
                         problem={conversation.problem}
                         loadError={conversation.loadError}
                         onSend={conversation.send}
+                        onNewConversation={() => void conversation.startNewConversation()}
+                        onOpenSession={(id) => void conversation.openSession(id)}
+                        onRetryLoad={() => void conversation.reload()}
                         onConfigure={() => selectedAgent && setSettingsTarget(selectedAgent)}
                         onInitialize={() => selectedAgent && void runLifecycleAction(selectedAgent.id, "initialize")}
                         onDismissProblem={conversation.dismissProblem}
