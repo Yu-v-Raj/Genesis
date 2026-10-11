@@ -1,6 +1,5 @@
 """Native Google Gemini SDK adapter for the provider-neutral LLM Runtime."""
 
-import asyncio
 import json
 import re
 from collections.abc import Callable
@@ -14,8 +13,8 @@ from backend.app.core.llm_runtime.domain.exceptions import (
     LLMConfigurationError,
     LLMProviderError,
     LLMResponseNormalizationError,
-    LLMTimeoutError,
 )
+from backend.app.core.llm_runtime.infrastructure.errors import classify_provider_failure
 from backend.app.core.llm_runtime.domain.models import (
     LLMModel,
     LLMRequest,
@@ -77,9 +76,6 @@ class GeminiProvider(LLMProvider):
                 config=config,
             )
             return self._normalize_response(response, request.model)
-        except asyncio.TimeoutError as error:
-            self._log_generation_failure(error, request, started)
-            raise LLMTimeoutError("Gemini generation timed out.") from error
         except (AttributeError, IndexError, TypeError, ValueError) as error:
             self._log_generation_failure(error, request, started)
             raise LLMResponseNormalizationError(
@@ -90,7 +86,9 @@ class GeminiProvider(LLMProvider):
             raise
         except Exception as error:
             self._log_generation_failure(error, request, started)
-            raise LLMProviderError("Gemini generation failed.") from error
+            raise classify_provider_failure(
+                error, provider="Gemini", model=request.model.model_name, key_setting="GEMINI_API_KEY"
+            ) from error
 
     def _get_client(self) -> Any:
         if self._client is None:

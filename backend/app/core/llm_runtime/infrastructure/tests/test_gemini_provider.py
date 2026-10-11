@@ -9,7 +9,7 @@ from backend.app.core.core_services.config.settings import Settings
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.application.provider_registry import LLMProviderRegistry
-from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError, LLMProviderError
+from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError, LLMProviderError, LLMTimeoutError
 from backend.app.core.llm_runtime.domain.models import (
     GenerationConfig,
     LLMModel,
@@ -322,3 +322,45 @@ async def test_provider_failure_and_event_payload_do_not_expose_credentials_or_p
     )
     assert secret not in diagnostic
     assert "secret prompt" not in diagnostic
+
+
+class StatusError(Exception):
+    """Stands in for an SDK error carrying an HTTP status (as google-genai's ClientError does)."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__(f"{code} error with secret-free details")
+        self.code = code
+
+
+class ReadTimeout(Exception):
+    """Named like httpx's timeout, which the SDK raises instead of asyncio.TimeoutError."""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected", "message"),
+    [
+        (StatusError(401), LLMConfigurationError, "rejected the configured API key (HTTP 401)"),
+        (StatusError(403), LLMConfigurationError, "GEMINI_API_KEY"),
+        (StatusError(404), LLMConfigurationError, "is not available"),
+        (StatusError(429), LLMProviderError, "rate limit or quota"),
+        (StatusError(500), LLMProviderError, "Gemini generation failed."),
+        (ReadTimeout("read timed out"), LLMTimeoutError, "did not respond in time"),
+    ],
+)
+async def test_sdk_failures_are_classified_for_the_user(error: Exception, expected: type, message: str) -> None:
+    """Regression: a rejected key used to surface as a generic retryable 502."""
+    provider = GeminiProvider(
+        Settings(GEMINI_API_KEY="test-key", _env_file=None),
+        client_factory=lambda key, timeout: FakeClient(FakeModels(error=error)),
+    )
+    request = LLMRequest(
+        model=LLMModel(provider="gemini", model_name="gemini-test"),
+        messages=(Message(role=MessageRole.USER, content="hi"),),
+    )
+
+    with pytest.raises(expected) as caught:
+        await provider.generate(request)
+
+    assert message in str(caught.value)
+    assert "test-key" not in str(caught.value)

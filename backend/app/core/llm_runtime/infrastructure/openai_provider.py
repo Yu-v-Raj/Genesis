@@ -1,12 +1,12 @@
 """OpenAI SDK adapter; SDK specifics remain isolated here."""
 
-import asyncio
 import json
 from typing import Any
 
 from backend.app.core.core_services.config.settings import Settings
 from backend.app.core.llm_runtime.application.provider import LLMProvider
-from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError, LLMProviderError, LLMResponseNormalizationError, LLMTimeoutError
+from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError, LLMProviderError, LLMResponseNormalizationError
+from backend.app.core.llm_runtime.infrastructure.errors import classify_provider_failure
 from backend.app.core.llm_runtime.domain.models import (
     LLMModel,
     LLMRequest,
@@ -51,14 +51,14 @@ class OpenAIProvider(LLMProvider):
             choice = completion.choices[0]
             usage = completion.usage
             return LLMResponse(content=choice.message.content, model=request.model, finish_reason=choice.finish_reason, usage=Usage(input_tokens=None if usage is None else usage.prompt_tokens, output_tokens=None if usage is None else usage.completion_tokens, total_tokens=None if usage is None else usage.total_tokens), tool_calls=tuple(self._tool_call(item) for item in (choice.message.tool_calls or ())), metadata={})
-        except asyncio.TimeoutError as error:
-            raise LLMTimeoutError("OpenAI generation timed out.") from error
         except (IndexError, AttributeError, TypeError, ValueError) as error:
             raise LLMResponseNormalizationError("OpenAI returned a response Genesis could not normalize.") from error
         except LLMProviderError:
             raise
         except Exception as error:
-            raise LLMProviderError("OpenAI generation failed.") from error
+            raise classify_provider_failure(
+                error, provider="OpenAI", model=request.model.model_name, key_setting="OPENAI_API_KEY"
+            ) from error
 
     @staticmethod
     def _messages_payload(request: LLMRequest) -> list[dict[str, object]]:
