@@ -16,6 +16,7 @@ from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.agent_runtime.domain.interaction import InteractionSummary, ToolActivity
 from backend.app.core.agent_runtime.domain.session import AgentSession
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
+from backend.app.core.memory.application.memory_manager import MemoryManager
 from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError
 from backend.app.core.llm_runtime.domain.models import (
     LLMRequest,
@@ -47,6 +48,7 @@ class AgentInteractionService:
         context_assembler: AgentContextAssembler | None = None,
         tool_manager: ToolRuntimeManager | None = None,
         max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
+        memory: MemoryManager | None = None,
     ) -> None:
         if max_tool_iterations < 1:
             raise ValueError("Maximum tool iterations must be positive.")
@@ -56,6 +58,7 @@ class AgentInteractionService:
         self._context_assembler = context_assembler or AgentContextAssembler()
         self._tool_manager = tool_manager
         self._max_tool_iterations = max_tool_iterations
+        self._memory = memory
 
     async def chat(self, agent_id: UUID, message: str, session_id: UUID | None = None) -> tuple[Agent, LLMResponse]:
         """Run an interaction while preserving the established two-value contract."""
@@ -101,7 +104,9 @@ class AgentInteractionService:
         _require_available(agent)
         context = await self._agent_manager.get_context(agent_id)
         session = await self._agent_manager.get_session(agent_id, session_id)
-        system_messages = self._context_assembler.system_messages(agent)
+        memories = await self._memory.list_memories(agent_id) if self._memory is not None else ()
+        system_messages = self._context_assembler.system_messages(agent, memories)
+        history = self._context_assembler.history(session.messages)
         turn = [
             _tagged(item, interaction_id)
             for item in self._context_assembler.assemble(agent, context, message)
@@ -116,7 +121,7 @@ class AgentInteractionService:
                 response = await self._llm_manager.generate(
                     LLMRequest(
                         model=agent.llm_model,
-                        messages=(*system_messages, *session.messages, *turn),
+                        messages=(*system_messages, *history, *turn),
                         tools=tools,
                         metadata={"agent_id": str(agent.id), "interaction_id": str(interaction_id)},
                     )

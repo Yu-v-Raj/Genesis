@@ -208,5 +208,4 @@ Workflows:
   tokens twice; model calls themselves change nothing outside Genesis.
 - Agents and sessions are cached per process (see `20-Agent-Persistence.md`), so running
   several backend processes is not supported yet even though work claiming is safe.
-- Tool task history (`/api/tools/history`), memory records, and the event stream are
-  still in memory.
+- Tool task history (`/api/tools/history`) and the event stream are still in memory.

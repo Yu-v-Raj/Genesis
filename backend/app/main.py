@@ -14,6 +14,7 @@ from backend.app.core.agent_runtime.application.agent_manager import AgentManage
 from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.agent_runtime.application.agent_configuration_service import AgentConfigurationService
 from backend.app.core.agent_runtime.application.chat_work import CHAT_KIND, ChatWorkHandler
+from backend.app.core.agent_runtime.application.context_assembler import AgentContextAssembler
 from backend.app.core.agent_runtime.infrastructure.sqlalchemy_repositories import (
     SqlAlchemyAgentRepository,
     SqlAlchemySessionRepository,
@@ -28,7 +29,8 @@ from backend.app.core.execution_runtime.application.execution_manager import Exe
 from backend.app.core.execution_runtime.application.repositories import ExecutionRepository
 from backend.app.core.execution_runtime.infrastructure.sqlalchemy_repository import SqlAlchemyExecutionRepository
 from backend.app.core.memory.application.memory_manager import MemoryManager
-from backend.app.core.memory.infrastructure.in_memory_provider import InMemoryProvider
+from backend.app.core.memory.application.memory_provider import MemoryProvider
+from backend.app.core.memory.infrastructure.sqlalchemy_provider import SqlAlchemyMemoryProvider
 from backend.app.core.observability.application.heartbeat import HeartbeatService
 from backend.app.core.observability.application.logger_service import LoggerService
 from backend.app.core.observability.domain.events import (
@@ -98,7 +100,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await tool_runtime_manager.register(tool)
     execution_executor.set_tool_manager(tool_runtime_manager)
     plugin_manager = PluginManager()
-    memory_provider = InMemoryProvider()
+    memory_provider = SqlAlchemyMemoryProvider(session_factory)
     memory_manager = MemoryManager(memory_provider, event_bus)
     workflow_engine = WorkflowEngine(event_bus)
     workflow_repository = SqlAlchemyWorkflowRepository(session_factory)
@@ -115,7 +117,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     llm_provider_registry.register(GeminiProvider(settings))
     llm_manager = LLMManager(llm_provider_registry, event_bus)
     agent_interaction_service = AgentInteractionService(
-        agent_registry, agent_manager, llm_manager, tool_manager=tool_runtime_manager
+        agent_registry,
+        agent_manager,
+        llm_manager,
+        context_assembler=AgentContextAssembler(max_history_turns=settings.AGENT_CONTEXT_MAX_TURNS),
+        tool_manager=tool_runtime_manager,
+        memory=memory_manager,
     )
     # Chat turns run as durable executions through the same worker as all other work.
     execution_executor.register_handler(CHAT_KIND, ChatWorkHandler(agent_interaction_service, agent_manager))
@@ -152,7 +159,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(ToolRuntimeManager, tool_runtime_manager)
     service_registry.register_singleton(PluginManager, plugin_manager)
     service_registry.register_singleton(MemoryManager, memory_manager)
-    service_registry.register_singleton(InMemoryProvider, memory_provider)
+    service_registry.register_singleton(MemoryProvider, memory_provider)
     service_registry.register_singleton(WorkflowEngine, workflow_engine)
     service_registry.register_singleton(WorkflowRepository, workflow_repository)
     service_registry.register_singleton(WorkflowManager, workflow_manager)
@@ -182,7 +189,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "ToolRuntimeManager",
         "PluginManager",
         "MemoryManager",
-        "InMemoryProvider",
+        "MemoryProvider",
         "WorkflowEngine",
         "WorkflowRepository",
         "WorkflowManager",

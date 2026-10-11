@@ -85,7 +85,8 @@ work that was in flight:
 - Executions and workflow runs are durable since v0.12 (see
   `21-Durable-Executions-and-Workflows.md`); work cut off mid-step is recovered or held
   for a decision rather than resumed blindly.
-- Tool task history, memory records, and the event stream are still in memory.
+- Memories are durable since v0.13 (`17-Memory-Runtime.md`).
+- Tool task history and the event stream are still in memory.
 
 ## Operations
 

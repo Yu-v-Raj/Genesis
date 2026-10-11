@@ -693,33 +693,35 @@ Current runtime documentation includes:
 
 ### ✅ Completed
 
-- Core Platform
-- Observability
-- Realtime Communication
-- Agent Identity & Lifecycle
-- Execution Runtime Foundation
-- Tool Runtime
-- Memory Runtime
-- Workflow Runtime
-- LLM Runtime Foundation
-- OpenAI Provider
-- Gemini Provider
+- Core platform, observability, realtime events
+- Agent identity, reusable lifecycle, configuration (model, tools, instructions)
+- LLM Runtime with Gemini and OpenAI adapters; tool calling through a server-side safety gate
+- Tool, Memory, Workflow, and Execution runtimes
+- Persistent Agents, conversations, and memories (v0.11, v0.13)
+- Durable executions and workflows with lease-based workers and crash recovery (v0.12)
+- Chat turns as durable executions with checkpoints and evidence-based recovery (v0.13)
+- Memories in conversation context; turn-based history trimming (v0.13)
+- GitHub Actions CI (v0.13)
 
-### 🔜 Planned
+### 🔜 Next (from the verified gaps)
 
-- Agent ↔ LLM integration
-- Tool calling through LLM decisions
-- Context assembly
-- Persistent memory providers
-- Vector memory / semantic retrieval
-- RAG
-- Multi-agent coordination
-- Advanced workflow execution
-- Streaming LLM responses
-- Production deployment
-- Authentication and authorization
-- Distributed execution
-- Production-grade persistence
+1. **Authentication and authorization** — every endpoint is open today, so Genesis must
+   stay on a trusted local machine (see Security below).
+2. **Live provider verification** — run the real Gemini/OpenAI conversation test
+   (including thought-signature replay after a restart) with a valid key.
+3. **Memory relevance** — rank memories against the message instead of newest-first.
+4. Persist tool task history and events; remove the unused legacy subsystems
+   (`ToolManager`, `WorkflowEngine`, `PluginManager`, `useSystemDashboard`).
+5. Streaming responses; multi-process deployment (shared caches); multi-agent work.
+
+### 🔒 Security
+
+Genesis has **no authentication**. Anyone who can reach the backend can read
+conversations and memories, change Agents, and run tools and workflows. The documented
+commands bind to `127.0.0.1` only; do not expose the backend or frontend to other
+machines or the internet until authentication exists. API keys stay in the backend `.env`
+and are never returned by the API, but anything in conversations and memories is sent to
+the configured LLM provider.
 
 ---
 

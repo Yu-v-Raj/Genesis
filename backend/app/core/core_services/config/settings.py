@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     # how many executions / workflow runs one process works on at once.
     WORKER_LEASE_SECONDS: float = Field(default=30.0, gt=0)
     WORKER_CONCURRENCY: int = Field(default=4, ge=1)
+    # How many of the most recent complete turns of a conversation are sent to the model.
+    AGENT_CONTEXT_MAX_TURNS: int = Field(default=20, ge=1)
     OPENAI_API_KEY: SecretStr | None = None
     OPENAI_MODEL: str = "gpt-4.1-mini"
     OPENAI_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)
