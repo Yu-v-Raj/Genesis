@@ -5,7 +5,16 @@ export type ExecutionStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  /** The process stopped while the work was running; its outcome is unknown. */
+  | "interrupted";
+
+/** Server-computed retry eligibility; the UI never decides this itself. */
+export interface RetryInfo {
+  allowed: boolean;
+  requires_acknowledgement: boolean;
+  reason: string;
+}
 
 export interface ExecutionResult {
   status: ExecutionStatus;
@@ -25,7 +34,26 @@ export interface Execution {
   duration: number | null;
   result: ExecutionResult | null;
   error: string | null;
+  error_category: string | null;
+  current_step: string | null;
+  updated_at: string | null;
+  attempt: number;
+  retry_of: string | null;
+  retry: RetryInfo | null;
   metadata: Record<string, unknown>;
+}
+
+export interface ExecutionTransition {
+  sequence: number;
+  from_status: ExecutionStatus | null;
+  to_status: ExecutionStatus;
+  at: string;
+  detail: string | null;
+}
+
+export interface ExecutionHistoryResponse {
+  execution_id: string;
+  transitions: ExecutionTransition[];
 }
 
 export interface ExecutionListResponse {

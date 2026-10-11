@@ -1,5 +1,5 @@
 import { requestJson } from "@/services/api-client";
-import type { ExecuteAgentInput, Execution, ExecutionListResponse } from "@/types/executions";
+import type { ExecuteAgentInput, Execution, ExecutionHistoryResponse, ExecutionListResponse } from "@/types/executions";
 
 const EXECUTION_API_BASE_URL =
   process.env.NEXT_PUBLIC_EXECUTION_API_BASE_URL ?? "http://127.0.0.1:8000/api";
@@ -38,4 +38,13 @@ export const ExecutionService = Object.freeze({
     }),
   cancel: (executionId: string): Promise<Execution> =>
     request<Execution>(`/executions/${executionId}/cancel`, { method: "POST" }),
+  history: (executionId: string): Promise<ExecutionHistoryResponse> =>
+    request<ExecutionHistoryResponse>(`/executions/${executionId}/history`),
+  /** Queue a new attempt; the server refuses (409) unless retry is allowed and acknowledged where required. */
+  retry: (executionId: string, acknowledgeSideEffects = false): Promise<Execution> =>
+    request<Execution>(`/executions/${executionId}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ acknowledge_side_effects: acknowledgeSideEffects }),
+    }),
 });

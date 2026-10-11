@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     )
     CORS_ORIGINS: list[str] = Field(default_factory=lambda: list(DEFAULT_CORS_ORIGINS))
     DATABASE_URL: str = DEFAULT_DATABASE_URL
+    # Durable work (v0.12): how long a worker's claim on a task lasts without renewal, and
+    # how many executions / workflow runs one process works on at once.
+    WORKER_LEASE_SECONDS: float = Field(default=30.0, gt=0)
+    WORKER_CONCURRENCY: int = Field(default=4, ge=1)
     OPENAI_API_KEY: SecretStr | None = None
     OPENAI_MODEL: str = "gpt-4.1-mini"
     OPENAI_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)

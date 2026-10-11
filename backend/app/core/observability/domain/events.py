@@ -321,6 +321,20 @@ class ExecutionCompleted(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionInterrupted(Event):
+    """Published when work was cut off by a process stop and its outcome is unknown."""
+
+    event_type: str = field(init=False, default="execution.interrupted")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionRecovered(Event):
+    """Published when recovery safely returns never-started work to the queue."""
+
+    event_type: str = field(init=False, default="execution.recovered")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ExecutionFailed(Event):
     """Published when an execution fails."""
 

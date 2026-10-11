@@ -27,6 +27,17 @@ class Execution:
     result: ExecutionResult | None = None
     error: str | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
+    # Durability (v0.12). A retry is a new execution linked by ``retry_of``.
+    attempt: int = 1
+    retry_of: UUID | None = None
+    error_category: str | None = None
+    current_step: str | None = None
+    updated_at: datetime | None = None
+    # Worker ownership: who may advance this execution, and until when.
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    # Optimistic-concurrency token, managed by the repository.
+    version: int = 0
 
     def __post_init__(self) -> None:
         """Validate timestamps and make metadata safely immutable."""
@@ -44,6 +55,8 @@ class Execution:
             raise ValueError("Execution finished_at cannot precede created_at.")
         if self.result is not None and self.result.status is not self.status:
             raise ValueError("Execution result status must match execution status.")
+        if self.attempt < 1:
+            raise ValueError("Execution attempt must be positive.")
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
     @property
@@ -56,4 +69,4 @@ class Execution:
 
     def with_status(self, status: ExecutionStatus, **changes: object) -> "Execution":
         """Return a copy with the supplied lifecycle fields changed."""
-        return replace(self, status=status, **changes)
+        return replace(self, status=status, **{"updated_at": _utc_now(), **changes})

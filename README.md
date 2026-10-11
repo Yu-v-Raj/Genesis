@@ -614,8 +614,12 @@ python -m uvicorn backend.app.main:app --reload
 ```
 
 The backend refuses to start, with an explanation, if the database is unreachable or not
-migrated. Agent definitions, configuration, and conversation history survive restarts;
-in-flight replies, executions, workflows, memory records, and events do not.
+migrated (run `alembic upgrade head` after pulling new code). Agent definitions,
+configuration, conversation history, executions, and workflow definitions and runs survive
+restarts. Work a crash cut off is resumed only when that is safe; anything that may
+already have had an external effect is marked *interrupted* and waits for you to retry or
+cancel it (see `docs/21-Durable-Executions-and-Workflows.md`). In-flight chat replies,
+memory records, tool task history, and the event stream do not survive a restart.
 
 Backend:
 

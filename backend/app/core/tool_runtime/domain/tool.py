@@ -128,6 +128,7 @@ def builtin_tools() -> tuple[Tool, ...]:
                 description="Return a supplied message.",
                 capabilities=(ToolCapability.ECHO,),
                 permissions=permission,
+                side_effects=False,
                 parameters={
                     "type": "object",
                     "properties": {"message": {"type": "string"}},
@@ -142,6 +143,7 @@ def builtin_tools() -> tuple[Tool, ...]:
                 description="Evaluate safe arithmetic.",
                 capabilities=(ToolCapability.CALCULATION,),
                 permissions=permission,
+                side_effects=False,
                 parameters={
                     "type": "object",
                     "properties": {"expression": {"type": "string"}},
@@ -156,6 +158,7 @@ def builtin_tools() -> tuple[Tool, ...]:
                 description="Generate a random UUID.",
                 capabilities=(ToolCapability.IDENTIFIER_GENERATION,),
                 permissions=permission,
+                side_effects=False,
             ),
             handler=_uuid,
         ),
@@ -165,6 +168,7 @@ def builtin_tools() -> tuple[Tool, ...]:
                 description="Generate an integer in an inclusive range.",
                 capabilities=(ToolCapability.RANDOM_NUMBER,),
                 permissions=permission,
+                side_effects=False,
                 parameters={
                     "type": "object",
                     "properties": {"min": {"type": "integer"}, "max": {"type": "integer"}},
@@ -179,6 +183,7 @@ def builtin_tools() -> tuple[Tool, ...]:
                 description="Wait for a bounded duration.",
                 capabilities=(ToolCapability.DELAY,),
                 permissions=permission,
+                side_effects=False,
                 parameters={
                     "type": "object",
                     "properties": {"seconds": {"type": "number", "minimum": 0, "maximum": 60}},

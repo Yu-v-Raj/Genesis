@@ -6,7 +6,7 @@ Execution Runtime provides the independent lifecycle for work requested from an 
 
 ## Architecture
 
-`execution_runtime` follows the Core domain/application/infrastructure boundary. `ExecutionManager` owns lifecycle transitions, active runtime contexts, background tasks, history writes, and typed event publication. `ExecutionHistory` is a bounded, newest-first in-memory store whose interface can be backed by a database later. `ExecutionExecutor` is the replaceable deterministic worker.
+`execution_runtime` follows the Core domain/application/infrastructure boundary. `ExecutionManager` owns lifecycle transitions, the durable queue worker (claims, leases, recovery), and typed event publication. Storage goes through the `ExecutionRepository` port: `SqlAlchemyExecutionRepository` in the application, and `ExecutionHistory`, a bounded in-memory adapter, by default in unit tests. `ExecutionExecutor` performs the work (a tool call through Tool Runtime, or the deterministic placeholder). Durability, recovery, and retry semantics are specified in `21-Durable-Executions-and-Workflows.md`.
 
 ## Domain model
 
@@ -14,18 +14,20 @@ Execution Runtime provides the independent lifecycle for work requested from an 
 
 ## Lifecycle
 
-The supported states are `pending`, `queued`, `starting`, `running`, `completed`, `failed`, and `cancelled`. Terminal states cannot transition. The deterministic executor sleeps for roughly two seconds and returns `Execution completed successfully.`
+The supported states are `pending`, `queued`, `starting`, `running`, `completed`, `failed`, `cancelled`, and `interrupted` (the process stopped while the work was running, so its outcome is unknown). Terminal states cannot transition; a retry is a new linked execution. The deterministic executor sleeps for roughly two seconds and returns `Execution completed successfully.`
 
 An execution is valid only for an existing initialized Agent that is not stopped. Starting or finishing an execution never changes its Agent lifecycle: one Agent may have any number of independent executions.
 
 ## Events
 
-The runtime publishes typed observability events: `execution.created`, `execution.queued`, `execution.started`, `execution.progress`, `execution.completed`, `execution.failed`, and `execution.cancelled`. Existing Event Bus subscribers, event history, logger, and realtime gateway receive them normally.
+The runtime publishes typed observability events: `execution.created`, `execution.queued`, `execution.started`, `execution.progress`, `execution.completed`, `execution.failed`, `execution.cancelled`, `execution.interrupted`, and `execution.recovered`. Existing Event Bus subscribers, event history, logger, and realtime gateway receive them normally.
 
 ## REST API
 
 - `POST /api/agents/{id}/execute` creates and schedules an execution (202).
-- `GET /api/executions` lists bounded history, newest first.
+- `GET /api/executions` lists recent executions, newest first.
+- `GET /api/executions/{execution_id}/history` returns the durable state timeline.
+- `POST /api/executions/{execution_id}/retry` queues a new attempt when the server allows it.
 - `GET /api/executions/{execution_id}` reads one execution.
 - `GET /api/agents/{id}/executions` lists an Agent's executions.
 - `POST /api/executions/{execution_id}/cancel` requests cancellation.

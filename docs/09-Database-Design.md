@@ -127,6 +127,14 @@ Two deliberate deviations from the plan above, both reversible by a later migrat
 - JSON columns use JSONB on PostgreSQL and JSON on SQLite; nothing queries inside them yet,
   so no JSON indexes exist (Section 6).
 
+## 8.2 Implemented Schema (v0.12)
+
+Revision `0002` adds `executions` and `execution_transitions` (durable execution records
+and their append-only timeline), and `workflow_definitions`, `workflow_runs`, and
+`workflow_run_steps`. Indexes follow the known access patterns: claiming queued work
+(`status, created_at`) and per-Agent history (`agent_id, created_at`). Semantics are in
+`21-Durable-Executions-and-Workflows.md`.
+
 ## 9. Relationship to Other Documents
 
 This document defines database philosophy, organization, and evolution strategy. It intentionally does not define:

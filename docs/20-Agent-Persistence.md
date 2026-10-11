@@ -82,8 +82,10 @@ work that was in flight:
 
 - An interaction interrupted by a crash or restart is lost; its turn was never stored and
   the user re-sends the message.
-- Executions, workflow runs, tool task history, memory records, and the event stream are
-  still in memory and reset on restart.
+- Executions and workflow runs are durable since v0.12 (see
+  `21-Durable-Executions-and-Workflows.md`); work cut off mid-step is recovered or held
+  for a decision rather than resumed blindly.
+- Tool task history, memory records, and the event stream are still in memory.
 
 ## Operations
 

@@ -16,12 +16,13 @@ class ToolResponse(BaseModel):
     capabilities: list[str]
     permissions: list[str]
     enabled: bool
+    side_effects: bool
     metadata: dict[str, object]
 
     @classmethod
     def from_tool(cls, tool: Tool) -> "ToolResponse":
         definition = tool.definition
-        return cls(name=definition.name, description=definition.description, version=definition.version, capabilities=[item.value for item in definition.capabilities], permissions=[item.value for item in definition.permissions], enabled=definition.enabled, metadata=dict(definition.metadata))
+        return cls(name=definition.name, description=definition.description, version=definition.version, capabilities=[item.value for item in definition.capabilities], permissions=[item.value for item in definition.permissions], enabled=definition.enabled, side_effects=definition.side_effects, metadata=dict(definition.metadata))
 
 
 class ToolListResponse(BaseModel):
