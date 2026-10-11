@@ -9,7 +9,10 @@ import {
   formatToolValue, groupTurns, modelLabel, sessionLabel, toolStepLabel,
   type AgentReadiness, type ChatProblem, type ToolStep,
 } from "@/lib/agent-experience";
+import { RetryControl } from "@/components/durable/retry-control";
+import { statusText } from "@/lib/durable-work";
 import type { Agent, AgentSessionSummary, SessionMessage } from "@/types/agents";
+import type { Execution } from "@/types/executions";
 
 interface AgentConversationProps {
   agent: Agent | null;
@@ -26,6 +29,8 @@ interface AgentConversationProps {
   onNewConversation: () => void;
   onOpenSession: (sessionId: string) => void;
   onRetryLoad: () => void;
+  unfinished: Execution[];
+  onRetryUnfinished: (executionId: string, acknowledgeSideEffects: boolean) => Promise<string | null>;
   onConfigure: () => void;
   onInitialize: () => void;
   onDismissProblem: () => void;
@@ -79,6 +84,7 @@ function Bubble({ role, children }: { role: "user" | "assistant"; children: Reac
 export function AgentConversation({
   agent, readiness, messages, sessionId, sessions, loading, switching, pendingMessage, problem, loadError,
   onSend, onNewConversation, onOpenSession, onRetryLoad, onConfigure, onInitialize, onDismissProblem,
+  unfinished, onRetryUnfinished,
 }: AgentConversationProps) {
   const [input, setInput] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
@@ -205,6 +211,20 @@ export function AgentConversation({
           </div>
         )}
       </div>
+
+      {unfinished.length > 0 && !pending && (
+        <section aria-label="Messages that did not finish" className="mx-4 mb-3 space-y-2">
+          {unfinished.map((execution) => (
+            <div key={execution.execution_id} className="rounded-lg border border-border bg-background/40 p-3 text-xs">
+              <p className="text-foreground">“{String(execution.metadata.message ?? "")}”</p>
+              <p className="mt-1 text-muted-foreground">{statusText(execution.status)}{execution.error ? ` — ${execution.error}` : ""}</p>
+              <div className="mt-2">
+                <RetryControl retry={execution.retry} onRetry={(acknowledge) => onRetryUnfinished(execution.execution_id, acknowledge)} />
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
 
       {problem && (
         <div role="alert" className="mx-4 mb-3 flex items-start gap-3 rounded-lg border border-red-400/25 bg-red-400/5 p-3 text-sm text-red-100">

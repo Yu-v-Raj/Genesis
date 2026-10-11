@@ -143,11 +143,13 @@ class AgentChatResponse(BaseModel):
     response: GenerateResponse
     interaction_id: UUID
     session_id: UUID | None
+    # The durable execution that carried this turn (equal to interaction_id).
+    execution_id: UUID | None = None
     tool_activities: list["ToolActivityResponse"]
 
     @classmethod
-    def from_domain(cls, agent: Agent, response: LLMResponse, interaction: InteractionSummary) -> "AgentChatResponse":
-        return cls(agent=AgentResponse.from_agent(agent), response=GenerateResponse.from_domain(response), interaction_id=interaction.interaction_id, session_id=interaction.session_id, tool_activities=[ToolActivityResponse.from_domain(activity) for activity in interaction.tool_activities])
+    def from_domain(cls, agent: Agent, response: LLMResponse, interaction: InteractionSummary, execution_id: UUID | None = None) -> "AgentChatResponse":
+        return cls(agent=AgentResponse.from_agent(agent), response=GenerateResponse.from_domain(response), interaction_id=interaction.interaction_id, session_id=interaction.session_id, execution_id=execution_id, tool_activities=[ToolActivityResponse.from_domain(activity) for activity in interaction.tool_activities])
 
 
 class ToolActivityResponse(BaseModel):

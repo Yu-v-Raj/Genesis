@@ -36,6 +36,9 @@ class Execution:
     # Worker ownership: who may advance this execution, and until when.
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
+    # Durable progress evidence written during the work (for example which tools started),
+    # used by recovery and retry decisions. Never holds secrets or provider metadata.
+    checkpoint: Mapping[str, object] = field(default_factory=dict)
     # Optimistic-concurrency token, managed by the repository.
     version: int = 0
 
@@ -58,6 +61,7 @@ class Execution:
         if self.attempt < 1:
             raise ValueError("Execution attempt must be positive.")
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "checkpoint", MappingProxyType(dict(self.checkpoint)))
 
     @property
     def duration(self) -> float | None:

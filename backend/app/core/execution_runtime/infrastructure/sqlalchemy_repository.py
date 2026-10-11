@@ -46,7 +46,9 @@ class SqlAlchemyExecutionRepository(ExecutionRepository):
                 if await db.get(ExecutionRow, current.execution_id) is None:
                     raise PersistenceError("The execution no longer exists in storage.")
                 raise PersistenceConflictError("The execution changed concurrently.")
-            if saved.status is not current.status:
+            # Status changes always enter the timeline; same-status checkpoints do when they
+            # carry a description.
+            if saved.status is not current.status or detail is not None:
                 await _record(db, saved, current.status, detail)
         return saved
 
@@ -182,6 +184,7 @@ def _columns(execution: Execution) -> dict[str, object]:
         "updated_at": execution.updated_at,
         "lease_owner": execution.lease_owner,
         "lease_expires_at": execution.lease_expires_at,
+        "checkpoint": dict(execution.checkpoint) or None,
         "version": execution.version,
     }
 
@@ -210,6 +213,7 @@ def _from_row(row: ExecutionRow) -> Execution:
         updated_at=_aware(row.updated_at),
         lease_owner=row.lease_owner,
         lease_expires_at=None if row.lease_expires_at is None else _aware(row.lease_expires_at),
+        checkpoint=row.checkpoint or {},
         version=row.version,
     )
 

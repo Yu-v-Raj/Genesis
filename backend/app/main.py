@@ -13,6 +13,7 @@ from backend.app.core.agent_runtime.application.agent_registry import AgentRegis
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.agent_runtime.application.agent_configuration_service import AgentConfigurationService
+from backend.app.core.agent_runtime.application.chat_work import CHAT_KIND, ChatWorkHandler
 from backend.app.core.agent_runtime.infrastructure.sqlalchemy_repositories import (
     SqlAlchemyAgentRepository,
     SqlAlchemySessionRepository,
@@ -116,6 +117,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     agent_interaction_service = AgentInteractionService(
         agent_registry, agent_manager, llm_manager, tool_manager=tool_runtime_manager
     )
+    # Chat turns run as durable executions through the same worker as all other work.
+    execution_executor.register_handler(CHAT_KIND, ChatWorkHandler(agent_interaction_service, agent_manager))
     agent_configuration_service = AgentConfigurationService(
         agent_registry, agent_manager, llm_manager, tool_runtime_manager
     )

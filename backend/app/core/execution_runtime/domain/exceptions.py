@@ -30,6 +30,10 @@ class AgentNotExecutableError(ExecutionRuntimeError):
         super().__init__(f"Agent '{agent_id}' cannot execute: {reason}.")
 
 
+class ExecutionAbortedError(ExecutionRuntimeError):
+    """Raised to a waiting caller when its execution was cancelled or interrupted."""
+
+
 class ExecutionRetryError(ExecutionRuntimeError):
     """Raised when a retry is not allowed or needs the caller's explicit confirmation."""
 

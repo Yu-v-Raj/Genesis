@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentApiError, AgentService } from "@/services/agent.service";
+import { ExecutionApiError, ExecutionService } from "@/services/execution.service";
 import { describeChatError, type ChatProblem } from "@/lib/agent-experience";
+import { isActive, unfinishedChats } from "@/lib/durable-work";
+import type { Execution } from "@/types/executions";
 import type { Agent, AgentChatResponse, AgentSession, AgentSessionSummary, SessionMessage } from "@/types/agents";
 
 /**
@@ -19,8 +22,18 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
   const [loadError, setLoadError] = useState<string | null>(null);
   const [problem, setProblem] = useState<ChatProblem | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [executions, setExecutions] = useState<Execution[]>([]);
   const inFlight = useRef(false);
   const sessionId = session?.id ?? null;
+
+  const refreshExecutions = useCallback(async () => {
+    if (!agentId) return;
+    try {
+      setExecutions((await ExecutionService.listForAgent(agentId)).executions);
+    } catch {
+      // Unfinished-message hints are optional; the conversation still works.
+    }
+  }, [agentId]);
 
   const refreshSessions = useCallback(async () => {
     if (!agentId) return;
@@ -42,12 +55,13 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
       setLoadError(null);
       setSession(sessionId ? await AgentService.getSessionById(agentId, sessionId) : await AgentService.getSession(agentId));
       void refreshSessions();
+      void refreshExecutions();
     } catch (cause) {
       setLoadError(cause instanceof AgentApiError ? cause.message : "Unable to load this conversation.");
     } finally {
       setLoading(false);
     }
-  }, [agentId, refreshSessions]);
+  }, [agentId, refreshSessions, refreshExecutions]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -75,12 +89,29 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
       if (status === 409 || status === 503) {
         void AgentService.get(agentId).then((agent) => onAgentUpdated?.(agent)).catch(() => undefined);
       }
+      void refreshExecutions();
       return null;
     } finally {
       inFlight.current = false;
       setPendingMessage(null);
     }
-  }, [agentId, onAgentUpdated, open, sessionId]);
+  }, [agentId, onAgentUpdated, open, sessionId, refreshExecutions]);
+
+  /** Retry an unfinished message through the Execution Runtime, then follow it to the end. */
+  const retryUnfinished = useCallback(async (executionId: string, acknowledgeSideEffects: boolean): Promise<string | null> => {
+    try {
+      let attempt = await ExecutionService.retry(executionId, acknowledgeSideEffects);
+      await refreshExecutions();
+      for (let waited = 0; isActive(attempt.status) && waited < 120_000; waited += 500) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        attempt = await ExecutionService.get(attempt.execution_id);
+      }
+      await open(sessionId);
+      return attempt.status === "completed" ? null : attempt.error ?? `The retry ended as ${attempt.status}.`;
+    } catch (cause) {
+      return cause instanceof ExecutionApiError ? cause.message : "The retry could not be started.";
+    }
+  }, [open, refreshExecutions, sessionId]);
 
   const startNewConversation = useCallback(async () => {
     if (!agentId || inFlight.current) return;
@@ -116,6 +147,8 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
     problem,
     dismissProblem: () => setProblem(null),
     send,
+    unfinished: unfinishedChats(executions, sessionId),
+    retryUnfinished,
     startNewConversation,
     openSession,
     reload: () => open(sessionId),

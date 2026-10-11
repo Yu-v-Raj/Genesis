@@ -67,6 +67,8 @@ class ExecutionResponse(BaseModel):
     retry_of: UUID | None
     retry: RetryInfoResponse | None
     metadata: dict[str, object]
+    # Progress evidence (e.g. tools started, with names and side-effect flags only).
+    checkpoint: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
     def from_execution(cls, execution: Execution, retry: RetryDecision | None = None) -> "ExecutionResponse":
@@ -87,6 +89,7 @@ class ExecutionResponse(BaseModel):
             retry_of=execution.retry_of,
             retry=None if retry is None else RetryInfoResponse.from_decision(retry),
             metadata=dict(execution.metadata),
+            checkpoint=dict(execution.checkpoint),
         )
 
 

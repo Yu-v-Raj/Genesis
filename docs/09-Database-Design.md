@@ -135,6 +135,11 @@ and their append-only timeline), and `workflow_definitions`, `workflow_runs`, an
 (`status, created_at`) and per-Agent history (`agent_id, created_at`). Semantics are in
 `21-Durable-Executions-and-Workflows.md`.
 
+## 8.3 Implemented Schema (v0.13)
+
+Revision `0003` adds a nullable `executions.checkpoint` JSON column: durable progress
+evidence (for chat turns, the tools that started) used by recovery and retry decisions.
+
 ## 9. Relationship to Other Documents
 
 This document defines database philosophy, organization, and evolution strategy. It intentionally does not define:

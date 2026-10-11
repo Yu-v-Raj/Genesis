@@ -41,6 +41,8 @@ export interface Execution {
   retry_of: string | null;
   retry: RetryInfo | null;
   metadata: Record<string, unknown>;
+  /** Progress evidence, e.g. tools that started (names and side-effect flags only). */
+  checkpoint: Record<string, unknown>;
 }
 
 export interface ExecutionTransition {

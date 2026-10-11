@@ -55,6 +55,8 @@ class ExecutionRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     lease_owner: Mapped[str | None] = mapped_column(String(200))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Progress evidence for recovery (e.g. tools started); never secrets or provider data.
+    checkpoint: Mapped[dict[str, object] | None] = mapped_column(JSONType)
     version: Mapped[int] = mapped_column(Integer)
 
 

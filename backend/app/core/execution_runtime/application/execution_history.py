@@ -53,7 +53,7 @@ class ExecutionHistory(ExecutionRepository):
                 raise PersistenceConflictError("The execution changed concurrently.")
             saved = replace(updated, version=current.version + 1)
             self._executions[saved.execution_id] = saved
-            if saved.status is not stored.status:
+            if saved.status is not stored.status or detail is not None:
                 self._record(stored.status, saved, detail)
             return saved
 

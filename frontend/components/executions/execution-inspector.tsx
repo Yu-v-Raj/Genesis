@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, CircleSlash, Clock3, History, LoaderCircle, PlayCircle, XCircle } from "lucide-react";
 
 import { RetryControl } from "@/components/durable/retry-control";
-import { describeTransition, isActive, statusText } from "@/lib/durable-work";
+import { describeTransition, executionLabel, isActive, isChat, startedTools, statusText } from "@/lib/durable-work";
 import { ExecutionApiError, ExecutionService } from "@/services/execution.service";
 import type { Execution, ExecutionStatus, ExecutionTransition } from "@/types/executions";
 
@@ -30,7 +30,7 @@ function Status({ status }: { status: ExecutionStatus }) {
 }
 
 /** Recent executions from durable storage, with a timeline and server-gated retry. */
-export function ExecutionInspector({ executions, onChanged }: { executions: Execution[]; onChanged: () => Promise<void> | void }) {
+export function ExecutionInspector({ executions, agentNames = {}, onChanged }: { executions: Execution[]; agentNames?: Record<string, string>; onChanged: () => Promise<void> | void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ execution: Execution; timeline: ExecutionTransition[] } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -89,7 +89,7 @@ export function ExecutionInspector({ executions, onChanged }: { executions: Exec
                 >
                   <span className="min-w-0">
                     <span className="block truncate text-xs text-foreground">
-                      {typeof execution.metadata.tool_name === "string" ? `Tool: ${execution.metadata.tool_name}` : "Agent work"}
+                      {executionLabel(execution, agentNames[execution.agent_id])}
                       {execution.attempt > 1 && <span className="ml-1.5 text-muted-foreground">· attempt {execution.attempt}</span>}
                     </span>
                     <span className="mt-0.5 block text-[11px] text-muted-foreground">{new Date(execution.created_at).toLocaleString()}</span>
@@ -112,7 +112,14 @@ export function ExecutionInspector({ executions, onChanged }: { executions: Exec
                   <Status status={detail.execution.status} />
                   <span className="font-mono text-[11px] text-muted-foreground">{detail.execution.execution_id}</span>
                 </div>
-                {detail.execution.result?.output && <p className="text-xs text-foreground">Output: <span className="font-mono">{detail.execution.result.output}</span></p>}
+                <p className="text-xs text-foreground">{executionLabel(detail.execution, agentNames[detail.execution.agent_id])}</p>
+                {isChat(detail.execution) && (
+                  <dl className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+                    <div><dt>Conversation</dt><dd className="font-mono text-foreground">{String(detail.execution.metadata.session_id ?? "—").slice(0, 8)}</dd></div>
+                    <div><dt>Tools started</dt><dd className="text-foreground">{startedTools(detail.execution).join(", ") || "none"}</dd></div>
+                  </dl>
+                )}
+                {detail.execution.result?.output && <p className="text-xs text-foreground">{isChat(detail.execution) ? "Reply" : "Output"}: <span className={isChat(detail.execution) ? "" : "font-mono"}>{detail.execution.result.output}</span></p>}
                 {detail.execution.error && (
                   <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-2.5 text-xs leading-5 text-red-100">
                     {detail.execution.error_category && <span className="mr-1 font-medium">[{detail.execution.error_category}]</span>}

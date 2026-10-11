@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.app.core.agent_runtime.application.agent_configuration_service import AgentConfigurationService
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
+from backend.app.core.agent_runtime.application.chat_work import chat_metadata
 from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.domain.agent import Agent
@@ -25,6 +26,7 @@ from backend.app.core.api.dependencies.system import (
     get_agent_interaction_service,
     get_agent_manager,
     get_agent_registry,
+    get_execution_manager,
 )
 from backend.app.core.api.schemas.agents import (
     AgentContextResponse,
@@ -41,6 +43,8 @@ from backend.app.core.api.schemas.agents import (
     AgentSessionResponse,
     AgentSessionSummaryResponse,
 )
+from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager
+from backend.app.core.execution_runtime.domain.exceptions import AgentNotExecutableError, ExecutionAbortedError
 from backend.app.core.llm_runtime.domain.exceptions import (
     LLMConfigurationError,
     LLMProviderError,
@@ -57,6 +61,7 @@ AgentManagerDependency = Annotated[AgentManager, Depends(get_agent_manager)]
 AgentInteractionDependency = Annotated[
     AgentInteractionService, Depends(get_agent_interaction_service)
 ]
+ExecutionManagerDependency = Annotated[ExecutionManager, Depends(get_execution_manager)]
 AgentConfigurationDependency = Annotated[
     AgentConfigurationService, Depends(get_agent_configuration_service)
 ]
@@ -228,16 +233,24 @@ async def chat(
     agent_id: UUID,
     request: AgentChatRequest,
     interaction: AgentInteractionDependency,
+    executions: ExecutionManagerDependency,
 ) -> AgentChatResponse:
-    """Run one initialized Agent turn through the provider-neutral LLM Runtime."""
+    """Run one Agent turn as a durable execution and wait for its reply.
+
+    The request is checked first (model, availability, session), so rejected requests
+    create no execution. The turn then runs on the Execution Runtime worker; if this
+    request is dropped, the work still finishes and its reply is saved to the session.
+    """
     try:
-        agent, response, summary = await interaction.chat_with_summary(
-            agent_id, request.message, request.session_id
+        session_id = await interaction.prepare(agent_id, request.session_id)
+        execution, value = await executions.execute_and_wait(
+            agent_id, metadata=chat_metadata(request.message, session_id)
         )
-        return AgentChatResponse.from_domain(agent, response, summary)
+        agent, response, summary = value  # type: ignore[misc]
+        return AgentChatResponse.from_domain(agent, response, summary, execution_id=execution.execution_id)
     except (AgentNotFoundError, SessionNotFoundError) as error:
         raise _not_found(error) from error
-    except AgentLifecycleError as error:
+    except (AgentLifecycleError, AgentNotExecutableError, ExecutionAbortedError) as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except ProviderNotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error

@@ -37,7 +37,7 @@ class GatedExecutor(ExecutionExecutor):
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    def may_have_side_effects(self, metadata: Mapping[str, object]) -> bool:
+    def may_have_side_effects(self, metadata: Mapping[str, object], checkpoint: Mapping[str, object] | None = None) -> bool:
         return self.side_effects
 
     async def execute(self, context: ExecutionContext) -> str:

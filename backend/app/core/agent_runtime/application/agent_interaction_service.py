@@ -1,6 +1,8 @@
 """Bounded Agent coordination across the LLM and Tool runtimes."""
 
+import asyncio
 import json
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from uuid import UUID, uuid4
 
@@ -26,6 +28,10 @@ from backend.app.core.llm_runtime.domain.models import (
 )
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.tool_runtime.domain.tool_status import ToolResultStatus
+
+
+# Persists a checkpoint before a risky step; supplied by the execution worker.
+ProgressCallback = Callable[[Mapping[str, object]], Awaitable[None]]
 
 
 class AgentInteractionService:
@@ -56,17 +62,40 @@ class AgentInteractionService:
         agent, response, _ = await self.chat_with_summary(agent_id, message, session_id)
         return agent, response
 
+    async def prepare(self, agent_id: UUID, session_id: UUID | None = None) -> UUID:
+        """Check an Agent can take a message now and return the session it will go to.
+
+        Lets callers reject a request (no model, busy, stopped, unknown session) before
+        any durable work is created for it.
+        """
+        agent = self._agent_registry.get(agent_id)
+        if agent.llm_model is None:
+            raise LLMConfigurationError("This Agent has no model configured. Choose a model in its settings.")
+        _require_available(agent)
+        return (await self._agent_manager.get_session(agent_id, session_id)).id
+
     async def chat_with_summary(
-        self, agent_id: UUID, message: str, session_id: UUID | None = None
+        self,
+        agent_id: UUID,
+        message: str,
+        session_id: UUID | None = None,
+        *,
+        execution_id: UUID | None = None,
+        progress: ProgressCallback | None = None,
     ) -> tuple[Agent, LLMResponse, InteractionSummary]:
         """Run one IDLE Agent interaction and return its terminal record and LLM response.
 
         The turn's messages are committed to the session only when the interaction ends
         normally, so a failed request never leaves half a turn in the conversation.
+
+        When run as a durable execution, ``execution_id`` becomes the interaction ID (so
+        events, tool tasks, and stored messages correlate with the execution) and
+        ``progress`` persists a checkpoint before each tool call.
         """
         agent = self._agent_registry.get(agent_id)
-        interaction_id = uuid4()
+        interaction_id = execution_id or uuid4()
         activities: list[ToolActivity] = []
+        tools_started: list[dict[str, object]] = []
         if agent.llm_model is None:
             raise LLMConfigurationError("This Agent has no model configured. Choose a model in its settings.")
         _require_available(agent)
@@ -105,7 +134,9 @@ class AgentInteractionService:
                         ),
                     )
                 for tool_call in response.tool_calls:
-                    tool_message, activity = await self._tool_result_message(agent, tool_call, interaction_id)
+                    tool_message, activity = await self._tool_result_message(
+                        agent, tool_call, interaction_id, execution_id=execution_id, progress=progress, started=tools_started
+                    )
                     turn.append(_tagged(tool_message, interaction_id))
                     activities.append(activity)
             limit_response = LLMResponse(
@@ -117,7 +148,9 @@ class AgentInteractionService:
             )
             turn.append(_tagged(self._assistant_tool_call_message(limit_response), interaction_id))
             await self._commit_turn(agent_id, session, turn)
-        except Exception:
+        except (Exception, asyncio.CancelledError):
+            # CancelledError is not an Exception: without it a cancelled chat would leave
+            # the Agent RUNNING and unable to take another message.
             await self._agent_manager.finish_interaction(agent_id, interaction_id=interaction_id)
             raise
         return (
@@ -131,6 +164,12 @@ class AgentInteractionService:
         await self._agent_manager.append_session_messages(
             agent_id, session.id, *turn, expected_length=len(session.messages)
         )
+
+    def _tool_side_effects(self, tool_name: str) -> bool:
+        try:
+            return bool(self._tool_manager.get_tool(tool_name).definition.side_effects)  # type: ignore[union-attr]
+        except Exception:
+            return True
 
     def _tool_definitions(self, agent: Agent) -> tuple[ToolDefinition, ...]:
         if self._tool_manager is None:
@@ -154,7 +193,14 @@ class AgentInteractionService:
         )
 
     async def _tool_result_message(
-        self, agent: Agent, tool_call: ToolCall, interaction_id: UUID
+        self,
+        agent: Agent,
+        tool_call: ToolCall,
+        interaction_id: UUID,
+        *,
+        execution_id: UUID | None = None,
+        progress: ProgressCallback | None = None,
+        started: list[dict[str, object]] | None = None,
     ) -> tuple[Message, ToolActivity]:
         if self._tool_manager is None:
             result = ToolResult(
@@ -178,11 +224,21 @@ class AgentInteractionService:
                 )
                 activity = ToolActivity(tool_name=tool_call.name, status="rejected", error=rejection)
             else:
+                if progress is not None and started is not None:
+                    # Checkpoint before the call: if the process dies during it, recovery
+                    # knows this tool may already have acted. Arguments are not recorded.
+                    started.append({
+                        "name": tool_call.name,
+                        "call_id": tool_call.call_id,
+                        "side_effects": self._tool_side_effects(tool_call.name),
+                    })
+                    await progress({"step": f"tool:{tool_call.name}", "tools_started": list(started)})
                 try:
                     task = await self._tool_manager.execute(
                         tool_name=tool_call.name,
                         arguments=tool_call.arguments,
                         metadata={"agent_id": str(agent.id), "interaction_id": str(interaction_id)},
+                        execution_id=execution_id,
                     )
                     execution_result = task.result
                     if execution_result is None or execution_result.status is not ToolResultStatus.COMPLETED:

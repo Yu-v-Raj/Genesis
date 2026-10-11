@@ -141,6 +141,8 @@ export default function AgentsPage() {
                         onNewConversation={() => void conversation.startNewConversation()}
                         onOpenSession={(id) => void conversation.openSession(id)}
                         onRetryLoad={() => void conversation.reload()}
+                        unfinished={conversation.unfinished}
+                        onRetryUnfinished={conversation.retryUnfinished}
                         onConfigure={() => selectedAgent && setSettingsTarget(selectedAgent)}
                         onInitialize={() => selectedAgent && void runLifecycleAction(selectedAgent.id, "initialize")}
                         onDismissProblem={conversation.dismissProblem}

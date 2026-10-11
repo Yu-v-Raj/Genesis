@@ -9,7 +9,7 @@ is guaranteed and what is not.
 
 | Concept | What it is | Stored in |
 |---|---|---|
-| Execution | One unit of Agent work (a tool call or the deterministic placeholder) | `executions`, `execution_transitions` |
+| Execution | One unit of Agent work: a chat turn (v0.13), a tool call, or the deterministic placeholder | `executions`, `execution_transitions` |
 | Workflow definition | A reusable, versioned plan of tool steps and dependencies | `workflow_definitions` (one row per version) |
 | Workflow run | One attempt to carry out one definition version | `workflow_runs` |
 | Workflow step | One step of a run, with its own state, result, and error | `workflow_run_steps` |
@@ -60,6 +60,45 @@ Step: PENDING → READY → RUNNING → COMPLETED | FAILED
   The run's `attempt` increments.
 - Definitions are immutable per version. `PUT /api/workflow-definitions/{id}` stores a
   new version; a run always keeps the steps it was created with.
+
+## Chat turns as executions (v0.13)
+
+Every `POST /api/agents/{id}/chat` is a durable execution with
+`metadata = {"kind": "chat", "message": ..., "session_id": ...}`, run by the same worker as
+all other work through a registered `WorkHandler` (`agent_runtime/application/chat_work.py`).
+
+```text
+Agent (long-lived)  ─┬─ Session (conversation) ── messages tagged with interaction_id
+                     └─ Execution (one chat turn) ── execution_id == interaction_id
+                          ├─ timeline: queued → starting → running → checkpoint: tool:X → completed
+                          ├─ checkpoint: tools_started [{name, call_id, side_effects}]
+                          └─ Tool Runtime tasks with execution_id
+```
+
+- The request is checked first (model, Agent available, session belongs to the Agent);
+  rejected requests create no execution. The session is fixed when the request is made.
+- The HTTP request waits for the execution; if the client disconnects the turn still
+  finishes and is saved. The response adds `execution_id` (equal to `interaction_id`).
+- The Agent lifecycle is unchanged: the turn moves the Agent IDLE → RUNNING → IDLE, and
+  the execution records the outcome. Cancelling a running chat stops the work and always
+  returns the Agent to IDLE.
+- Before each approved tool call a checkpoint records the tool's name, call ID, and
+  declared side effects (never its arguments or provider metadata such as Gemini thought
+  signatures). Failures get a category: `configuration`, `timeout`, `provider_error`,
+  `agent_unavailable`, `invalid_request`, `conflict`, `storage`, or `chat_failed`.
+
+Recovery after a crash, from stored evidence:
+
+| Found | Decision |
+|---|---|
+| Queued / claimed-not-started chat | Runs after restart; its reply is saved to the session. |
+| Running chat whose turn **is** in the session (messages tagged with its ID) | `COMPLETED` — only marking it done was lost. Never re-run. |
+| Running chat, no saved turn, no side-effecting tool started | `INTERRUPTED`; retry allowed without confirmation (the model may be called again). |
+| Running chat, no saved turn, a side-effecting tool had started | `INTERRUPTED`; retry requires `acknowledge_side_effects`. |
+
+A retry is a new execution with the same message; because turns are saved atomically and
+a finished chat cannot be retried, retries never duplicate a saved turn. The Agents page
+lists a session's unfinished messages with their reason and a server-gated Retry.
 
 ## Queue and workers
 
@@ -163,6 +202,10 @@ Workflows:
 - Cancelling work held by another process marks it cancelled in storage, but only the
   owning process can stop its in-flight task; that process's later write is rejected.
 - `PAUSED` workflows pause dispatch only; a step already running finishes.
+- Chat turns share the worker pool (`WORKER_CONCURRENCY`) with other executions, so a
+  burst of long tool work can delay chat replies.
+- A model call cut off by a crash may be repeated by a retry, which can cost provider
+  tokens twice; model calls themselves change nothing outside Genesis.
 - Agents and sessions are cached per process (see `20-Agent-Persistence.md`), so running
   several backend processes is not supported yet even though work claiming is safe.
 - Tool task history (`/api/tools/history`), memory records, and the event stream are

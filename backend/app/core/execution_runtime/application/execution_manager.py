@@ -19,6 +19,7 @@ import asyncio
 import os
 import socket
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -33,6 +34,7 @@ from backend.app.core.execution_runtime.application.execution_history import Exe
 from backend.app.core.execution_runtime.application.repositories import ExecutionRepository
 from backend.app.core.execution_runtime.domain.exceptions import (
     AgentNotExecutableError,
+    ExecutionAbortedError,
     ExecutionLifecycleError,
     ExecutionNotFoundError,
     ExecutionRetryError,
@@ -47,6 +49,7 @@ from backend.app.core.execution_runtime.domain.lifecycle import (
     retry_decision,
 )
 from backend.app.core.execution_runtime.domain.transition import ExecutionTransition
+from backend.app.core.execution_runtime.domain.work import WorkOutcome
 from backend.app.core.observability.domain.events import (
     Event,
     ExecutionCancelled,
@@ -105,6 +108,8 @@ class ExecutionManager:
         # Transient runtime handles; never persisted.
         self._running: dict[UUID, asyncio.Task[None]] = {}
         self._cancel_requested: set[UUID] = set()
+        # Callers in this process awaiting an execution's outcome (e.g. an HTTP chat).
+        self._waiters: dict[UUID, asyncio.Future[object]] = {}
         self._dispatcher: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._closing = False
@@ -152,6 +157,25 @@ class ExecutionManager:
         self._ensure_dispatcher()
         return execution
 
+    async def execute_and_wait(
+        self, agent_id: UUID, *, metadata: Mapping[str, object]
+    ) -> tuple[Execution, object]:
+        """Queue durable work and wait for it in this process.
+
+        Returns the finished execution and the handler's in-process value. If the work
+        fails, the handler's exception is re-raised here. If the caller stops waiting (for
+        example the client disconnects) the work still runs to completion.
+        """
+        execution = await self.create_execution(agent_id, metadata=metadata)
+        waiter: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+        self._waiters[execution.execution_id] = waiter
+        self._ensure_dispatcher()
+        try:
+            value = await asyncio.shield(waiter)
+        finally:
+            self._waiters.pop(execution.execution_id, None)
+        return await self.get_execution(execution.execution_id), value
+
     async def cancel_execution(self, execution_id: UUID) -> Execution:
         """Cancel a non-terminal execution and stop its work if this process is running it."""
         current = await self.get_execution(execution_id)
@@ -180,7 +204,8 @@ class ExecutionManager:
 
     def retry_decision(self, execution: Execution) -> RetryDecision:
         return retry_decision(
-            execution.status, may_have_side_effects=self._executor.may_have_side_effects(execution.metadata)
+            execution.status,
+            may_have_side_effects=self._executor.may_have_side_effects(execution.metadata, execution.checkpoint),
         )
 
     async def get_execution(self, execution_id: UUID) -> Execution:
@@ -239,12 +264,25 @@ class ExecutionManager:
                         )
                     )
                 elif stale.status is ExecutionStatus.RUNNING:
-                    recovered.append(await self._interrupt(stale))
+                    recovered.append(await self._resolve_running(stale))
             except PersistenceConflictError:
                 continue  # another worker resolved it first
         if recovered:
             self._wake.set()
         return tuple(recovered)
+
+    async def _resolve_running(self, stale: Execution) -> Execution:
+        """Work cut off while RUNNING: completed if stored evidence proves it, else interrupted."""
+        verdict = await self._executor.reconcile(stale)
+        if verdict.completed:
+            return await self._finish(
+                stale,
+                ExecutionStatus.COMPLETED,
+                ExecutionCompleted,
+                output=verdict.output,
+                detail=f"recovered: {verdict.detail or 'the work had finished before the process stopped'}",
+            )
+        return await self._interrupt(stale)
 
     def _ensure_dispatcher(self) -> None:
         if self._closing:
@@ -288,10 +326,28 @@ class ExecutionManager:
 
     async def _run(self, claimed: Execution) -> None:
         execution_id = claimed.execution_id
+        latest: Execution = claimed
+
+        async def report_progress(update: Mapping[str, object]) -> None:
+            # A checkpoint is persisted *before* the step it describes, so recovery knows
+            # what may already have happened. A concurrent cancel makes this raise.
+            nonlocal latest
+            step = update.get("step")
+            latest = await self._repository.transition(
+                latest,
+                replace(
+                    latest,
+                    checkpoint={**latest.checkpoint, **update},
+                    current_step=step if isinstance(step, str) else latest.current_step,
+                    updated_at=_utc_now(),
+                ),
+                detail=f"checkpoint: {step}" if isinstance(step, str) else None,
+            )
+
         try:
             # Persisted before any work is invoked: past this point the outcome of an
             # interruption is unknown.
-            running = await self._transition(
+            latest = await self._transition(
                 claimed,
                 ExecutionStatus.RUNNING,
                 ExecutionStarted,
@@ -299,29 +355,44 @@ class ExecutionManager:
                 started_at=_utc_now(),
                 current_step="executing",
             )
-            await self._publish(ExecutionProgress, running, step="executing")
+            await self._publish(ExecutionProgress, latest, step="executing")
             context = ExecutionContext(
-                execution_id=execution_id, agent_id=running.agent_id, metadata=running.metadata
+                execution_id=execution_id,
+                agent_id=latest.agent_id,
+                metadata=latest.metadata,
+                report_progress=report_progress,
             )
-            output = await self._executor.execute(context)
-            await self._finish(running, ExecutionStatus.COMPLETED, ExecutionCompleted, output=output, detail="completed")
+            produced = await self._executor.execute(context)
+            outcome = produced if isinstance(produced, WorkOutcome) else WorkOutcome(output=str(produced))
+            await self._finish(
+                await self.get_execution(execution_id),
+                ExecutionStatus.COMPLETED,
+                ExecutionCompleted,
+                output=outcome.output,
+                detail="completed",
+            )
+            self._resolve_waiter(execution_id, value=outcome.value)
         except asyncio.CancelledError:
-            if execution_id not in self._cancel_requested:
-                # Shutdown, not a user cancel: record what is known about the work.
-                current = await self._repository.get(execution_id)
-                if current is not None and current.status is ExecutionStatus.RUNNING:
-                    await self._interrupt(current)
-                elif current is not None and current.status is ExecutionStatus.STARTING:
-                    await self._transition(
-                        current,
-                        ExecutionStatus.QUEUED,
-                        ExecutionRecovered,
-                        detail="returned to the queue at shutdown before work started",
-                        lease_owner=None,
-                        lease_expires_at=None,
-                    )
+            if execution_id in self._cancel_requested:
+                self._resolve_waiter(execution_id, error=ExecutionAbortedError("This work was cancelled."))
+                return
+            # Shutdown, not a user cancel: record what is known about the work.
+            current = await self._repository.get(execution_id)
+            if current is not None and current.status is ExecutionStatus.RUNNING:
+                await self._interrupt(current)
+            elif current is not None and current.status is ExecutionStatus.STARTING:
+                await self._transition(
+                    current,
+                    ExecutionStatus.QUEUED,
+                    ExecutionRecovered,
+                    detail="returned to the queue at shutdown before work started",
+                    lease_owner=None,
+                    lease_expires_at=None,
+                )
+            self._resolve_waiter(execution_id, error=ExecutionAbortedError("Genesis stopped before this work finished."))
         except (PersistenceConflictError, ExecutionLifecycleError):
-            return  # cancelled or resolved elsewhere; never overwrite a newer state
+            # Cancelled or resolved elsewhere; never overwrite a newer state.
+            self._resolve_waiter(execution_id, error=ExecutionAbortedError("This work was cancelled."))
         except Exception as error:
             current = await self._repository.get(execution_id)
             if current is not None:
@@ -330,9 +401,19 @@ class ExecutionManager:
                     ExecutionStatus.FAILED,
                     ExecutionFailed,
                     error=str(error),
-                    error_category="tool_failed" if "tool_name" in current.metadata else "execution_failed",
+                    error_category=self._executor.error_category(current.metadata, error),
                     detail="failed",
                 )
+            self._resolve_waiter(execution_id, error=error)
+
+    def _resolve_waiter(self, execution_id: UUID, *, value: object = None, error: BaseException | None = None) -> None:
+        waiter = self._waiters.get(execution_id)
+        if waiter is None or waiter.done():
+            return
+        if error is not None:
+            waiter.set_exception(error)
+        else:
+            waiter.set_result(value)
 
     async def _interrupt(self, current: Execution) -> Execution:
         return await self._transition(
@@ -428,6 +509,10 @@ class ExecutionManager:
             "status": execution.status.value,
             "attempt": execution.attempt,
         }
+        for key in ("kind", "session_id"):
+            value = execution.metadata.get(key)
+            if isinstance(value, str):
+                payload[key] = value
         if execution.retry_of is not None:
             payload["retry_of"] = str(execution.retry_of)
         if step is not None:

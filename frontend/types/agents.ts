@@ -62,6 +62,8 @@ export interface AgentChatResponse {
   response: { content: string | null; finish_reason: string | null };
   interaction_id: string;
   session_id: string | null;
+  /** The durable execution that carried this turn (equal to interaction_id). */
+  execution_id: string | null;
   tool_activities: ToolActivity[];
 }
 
