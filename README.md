@@ -642,13 +642,16 @@ npm ci
 npm run dev
 ```
 
-If port 3000 is busy, Next.js uses 3001; in development the backend accepts any
-localhost port.
+Open `http://localhost:3000`. If port 3000 is busy, Next.js uses 3001; in development the
+backend accepts any localhost port.
 
 ## 7. Create an Agent and chat
 
 Open **Agents → Create Agent**, pick a model marked *Ready* (it needs that provider's
-API key in `.env`), allow the calculator, and ask "Calculate 25 * 4".
+API key in `.env`; for Gemini, a key from Google AI Studio), allow the calculator, and ask
+"Calculate 25 * 4". Each message runs as a durable execution: if a reply fails or the
+backend stops mid-reply, the message is listed under the conversation with its reason and
+a Retry button, and Monitoring shows its full timeline.
 
 ## 8. Run the checks
 
@@ -662,11 +665,14 @@ npm --prefix frontend run lint
 npm --prefix frontend run build
 ```
 
-Frontend:
+To also run the persistence and recovery tests against PostgreSQL, point
+`GENESIS_TEST_POSTGRES_URL` at a disposable database (it is reset for every test).
 
-```text
-http://localhost:3000
-```
+GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on every push and pull
+request to `main`: backend tests and compile; persistence tests on SQLite and on a
+PostgreSQL 16 service container; Alembic upgrade, drift check, and downgrade on both
+engines; and frontend unit tests, type check, lint, and production build. CI needs no LLM
+keys: tests use deterministic fake providers. A real-provider check is manual (step 7).
 
 ---
 

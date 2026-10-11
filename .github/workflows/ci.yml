@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: the jobs only need to read the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (tests, compile, migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        # Disposable database for the PostgreSQL leg of the persistence tests.
+        image: postgres:16
+        env:
+          POSTGRES_USER: genesis
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: genesis_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U genesis -d genesis_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # No LLM credentials: tests use deterministic fake providers.
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install backend
+        run: python -m pip install -e ".[dev]"
+
+      - name: Compile
+        run: python -m compileall -q backend infra
+
+      - name: Tests (SQLite, one isolated database per test)
+        run: python -m pytest backend -q
+
+      - name: Persistence and recovery tests (SQLite and PostgreSQL)
+        env:
+          GENESIS_TEST_POSTGRES_URL: postgresql+asyncpg://genesis:ci-only-password@localhost:5432/genesis_test
+        run: >-
+          python -m pytest -q
+          backend/app/core/agent_runtime/infrastructure
+          backend/app/core/execution_runtime/infrastructure
+          backend/app/core/workflow_runtime/infrastructure
+
+      - name: Migrations on SQLite (upgrade, drift check, downgrade, upgrade)
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./ci-migrations.db
+        run: |
+          alembic upgrade head
+          alembic check
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Migrations on PostgreSQL (upgrade, drift check, downgrade, upgrade)
+        env:
+          DATABASE_URL: postgresql+asyncpg://genesis:ci-only-password@localhost:5432/genesis_test
+        run: |
+          alembic downgrade base
+          alembic upgrade head
+          alembic check
+          alembic downgrade base
+          alembic upgrade head
+
+  frontend:
+    name: Frontend (tests, types, lint, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install (from the committed lockfile)
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Type check
+        run: npx tsc --noEmit -p .
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build

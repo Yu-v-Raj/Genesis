@@ -57,13 +57,15 @@ export function useMemory(selectedAgentId: string | null, realtime: RealtimeStat
   }, []);
 
   useEffect(() => {
-    if (selectedAgentId === null) {
-      setMemories([]);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-    queueMicrotask(() => void load(selectedAgentId));
+    queueMicrotask(() => {
+      if (selectedAgentId === null) {
+        setMemories([]);
+        setError(null);
+        setLoading(false);
+        return;
+      }
+      void load(selectedAgentId);
+    });
   }, [load, selectedAgentId]);
 
   useEffect(() => {
@@ -79,7 +81,7 @@ export function useMemory(selectedAgentId: string | null, realtime: RealtimeStat
     if (event.event_type === "memory.retrieved") return;
 
     if (event.event_type === "memory.deleted") {
-      setMemories((current) => current.filter((memory) => memory.memory_id !== memoryId));
+      queueMicrotask(() => setMemories((current) => current.filter((memory) => memory.memory_id !== memoryId)));
       return;
     }
     void MemoryService.get(memoryId)

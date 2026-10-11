@@ -25,7 +25,7 @@ export function ErrorState({
 
       <div className="flex flex-col gap-1">
         <p className="text-sm font-medium text-foreground">
-          Couldn't load the dashboard
+          Couldn&apos;t load the dashboard
         </p>
 
         <p className="text-xs text-muted-foreground">

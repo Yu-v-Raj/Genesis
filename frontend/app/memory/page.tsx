@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import {
   Bot,
   BrainCircuit,
@@ -133,9 +133,16 @@ function MemoryForm({ initial, pending, submitLabel, onCancel, onSubmit }: {
 export default function MemoryPage() {
   const realtime = useRealtime();
   const agentsState = useAgents(realtime);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [chosenAgentId, setChosenAgentId] = useState<string | null>(null);
+  // Derived, not synced by an effect: the chosen Agent while it exists, else the first one.
+  const selectedAgentId = chosenAgentId !== null && agentsState.agents.some((agent) => agent.id === chosenAgentId)
+    ? chosenAgentId
+    : agentsState.agents[0]?.id ?? null;
   const memory = useMemory(selectedAgentId, realtime);
-  const [selected, setSelected] = useState<MemoryRecord | null>(null);
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
+  // The latest version of the selected record, or nothing once it is gone.
+  const selected = memory.memories.find((item) => item.memory_id === selectedMemoryId) ?? null;
+  const setSelected = (record: MemoryRecord | null) => setSelectedMemoryId(record?.memory_id ?? null);
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -145,21 +152,6 @@ export default function MemoryPage() {
     () => realtime.latestEvent ? [realtime.latestEvent] : [],
     [realtime.latestEvent]
   );
-
-  useEffect(() => {
-    if (selectedAgentId !== null && !agentsState.agents.some((agent) => agent.id === selectedAgentId)) setSelectedAgentId(null);
-    if (selectedAgentId === null && agentsState.agents.length > 0) setSelectedAgentId(agentsState.agents[0].id);
-  }, [agentsState.agents, selectedAgentId]);
-
-  useEffect(() => {
-    if (selected && !memory.memories.some((item) => item.memory_id === selected.memory_id)) {
-      setSelected(null);
-      setEditing(false);
-      setConfirmDelete(false);
-    } else if (selected) {
-      setSelected(memory.memories.find((item) => item.memory_id === selected.memory_id) ?? null);
-    }
-  }, [memory.memories, selected]);
 
   const counts = useMemo(() => kinds.map((kind) => ({ kind, count: memory.memories.filter((item) => item.kind === kind).length })), [memory.memories]);
   const selectedAgent = agentsState.agents.find((agent) => agent.id === selectedAgentId);
@@ -202,7 +194,7 @@ export default function MemoryPage() {
   return <div className="flex h-screen w-full overflow-hidden"><Sidebar /><div className="flex min-w-0 flex-1 flex-col overflow-hidden"><Topbar /><main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8"><div className="mx-auto flex max-w-7xl flex-col gap-6"><RealtimeNotifications events={notificationEvents} />
     <div className="flex flex-col gap-4 border-b border-border/70 pb-5 sm:flex-row sm:items-end sm:justify-between"><div><div className="flex items-center gap-2"><span className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/20 bg-primary/10"><BrainCircuit className="h-4 w-4 text-primary" /></span><div><h1 className="text-2xl font-semibold tracking-tight text-foreground">Memory</h1><p className="mt-0.5 text-sm text-muted-foreground">Runtime knowledge your Genesis agents can store and retrieve.</p></div></div><div className="mt-3"><RealtimeStatus connectionStatus={realtime.connectionStatus} runtimeState="memory runtime" lastHeartbeat={null} /></div></div><button type="button" onClick={() => setAddOpen(true)} disabled={!selectedAgentId} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white shadow-sm shadow-primary/20 transition hover:bg-primary/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"><Plus className="h-4 w-4" />Add Memory</button></div>
     {agentsState.loading ? <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted-foreground"><LoaderCircle className="mr-2 inline h-4 w-4 animate-spin" />Loading agents…</div> : agentsState.error && agentsState.agents.length === 0 ? <ErrorState message={agentsState.error} onRetry={() => void agentsState.retry()} /> : agentsState.agents.length === 0 ? <section className="rounded-xl border border-dashed border-border bg-surface px-6 py-14 text-center"><BrainCircuit className="mx-auto h-8 w-8 text-primary" /><h2 className="mt-4 text-lg font-semibold text-foreground">No agents available</h2><p className="mt-2 text-sm text-muted-foreground">Create an agent before adding agent-scoped runtime memory.</p></section> : <>
-      <section aria-label="Memory scope" className="grid gap-4 rounded-xl border border-border bg-surface p-4 shadow-sm lg:grid-cols-[minmax(0,1fr)_auto]"><label className="min-w-0 text-sm font-medium text-foreground"><span className="flex items-center gap-1.5"><Bot className="h-3.5 w-3.5 text-primary" />Agent</span><select aria-label="Select an agent" value={selectedAgentId ?? ""} onChange={(event) => { setSelectedAgentId(event.target.value || null); setSearch(""); setSelected(null); }} className="mt-1.5 w-full rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25">{agentsState.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label><div className="self-end rounded-lg border border-white/[0.06] bg-white/[0.025] px-3 py-2 text-xs text-muted-foreground">{selectedAgent?.description || "Agent-scoped memory"}</div></section>
+      <section aria-label="Memory scope" className="grid gap-4 rounded-xl border border-border bg-surface p-4 shadow-sm lg:grid-cols-[minmax(0,1fr)_auto]"><label className="min-w-0 text-sm font-medium text-foreground"><span className="flex items-center gap-1.5"><Bot className="h-3.5 w-3.5 text-primary" />Agent</span><select aria-label="Select an agent" value={selectedAgentId ?? ""} onChange={(event) => { setChosenAgentId(event.target.value || null); setSearch(""); setSelected(null); }} className="mt-1.5 w-full rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25">{agentsState.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label><div className="self-end rounded-lg border border-white/[0.06] bg-white/[0.025] px-3 py-2 text-xs text-muted-foreground">{selectedAgent?.description || "Agent-scoped memory"}</div></section>
       <section aria-label="Memory statistics" className="grid grid-cols-2 gap-3 sm:grid-cols-5"><div className="rounded-xl border border-border bg-surface px-4 py-3 shadow-sm"><span className="text-xs font-medium text-muted-foreground">Total memories</span><p className="mt-2 text-2xl font-semibold text-foreground">{memory.memories.length}</p></div>{counts.map(({ kind, count }) => <div key={kind} className="rounded-xl border border-border bg-surface px-4 py-3 shadow-sm"><KindBadge kind={kind} /><p className="mt-2 text-2xl font-semibold text-foreground">{count}</p></div>)}</section>
       {memory.error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-400/25 bg-red-400/5 px-4 py-3 text-sm text-red-200"><span>{memory.error}</span><button type="button" onClick={retry} className="rounded-md border border-red-400/25 px-3 py-1.5 text-xs font-medium transition hover:bg-red-400/10">Retry</button></div>}
       <form onSubmit={(event) => void runSearch(event)} className="flex flex-col gap-2 sm:flex-row"><label className="relative min-w-0 flex-1"><span className="sr-only">Search memories</span><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={search} onChange={(event) => setSearch(event.target.value)} className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25" placeholder="Search this agent’s memory by text" /></label><button type="submit" disabled={memory.searching} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-white/5 hover:text-foreground disabled:opacity-50">{memory.searching && <LoaderCircle className="h-4 w-4 animate-spin" />}{memory.searching ? "Searching…" : "Search"}</button>{search && <button type="button" onClick={() => { setSearch(""); retry(); }} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground"><X className="h-4 w-4" />Clear</button>}</form>

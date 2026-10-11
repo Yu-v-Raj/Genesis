@@ -80,12 +80,12 @@ export function useMonitoring(): {
   }, []);
 
   useEffect(() => {
-    void load();
+    queueMicrotask(() => void load());
   }, [load]);
 
   useEffect(() => {
     if (latestEvent === null) return;
-    setData((current) => {
+    queueMicrotask(() => setData((current) => {
       if (current === null) return current;
       const next = { ...current, events: upsertEvent(current.events, latestEvent) };
       if (latestEvent.event_type === "system.heartbeat") {
@@ -95,7 +95,7 @@ export function useMonitoring(): {
         return { ...next, runtime: { state: "stopped" } };
       }
       return next;
-    });
+    }));
     if (latestEvent.event_type.startsWith("agent.") || latestEvent.event_type.startsWith("execution.")) {
       void Promise.all([AgentService.list(), ExecutionService.list()])
         .then(([agents, executions]) => setData((current) => current === null ? current : { ...current, agents: agents.agents, executions: executions.executions }))

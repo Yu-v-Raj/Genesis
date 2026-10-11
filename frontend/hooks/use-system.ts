@@ -184,13 +184,15 @@ export function useSystemDashboard(): {
   }, []);
 
   useEffect(() => {
-    void loadInitialDashboard();
+    queueMicrotask(() => void loadInitialDashboard());
   }, [loadInitialDashboard]);
 
   useEffect(() => {
     if (latestEvent === null) return;
-    setData((currentData) =>
-      currentData === null ? currentData : applyRealtimeEvent(currentData, latestEvent)
+    queueMicrotask(() =>
+      setData((currentData) =>
+        currentData === null ? currentData : applyRealtimeEvent(currentData, latestEvent)
+      )
     );
   }, [latestEvent]);
 
