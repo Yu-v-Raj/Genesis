@@ -3,7 +3,9 @@
 Each step's state change is persisted before its effect: a step is stored as RUNNING
 *before* its tool is called and as COMPLETED/FAILED after, so after a crash Genesis knows
 exactly which steps finished and which were in flight. Tools run through
-ToolRuntimeManager, as before.
+ToolRuntimeManager under a workflow context: the tool policy checks each call against
+the stored, running step (see ``workflow_step_grant``), and workflows never borrow an
+Agent's identity.
 
 Recovery (startup and every dispatcher tick) only touches runs whose lease expired:
 in-flight steps of side-effect-free tools return to PENDING and re-run; in-flight steps
@@ -19,7 +21,9 @@ from uuid import UUID
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.core_services.logging.logger import logger
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
+from backend.app.core.tool_runtime.application.authorization_policy import WorkflowStepGrant
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
+from backend.app.core.tool_runtime.domain.authorization import WorkflowToolContext
 from backend.app.core.tool_runtime.domain.task import TaskStatus
 from backend.app.core.workflow_runtime.application.in_memory_repository import InMemoryWorkflowRepository
 from backend.app.core.workflow_runtime.application.repositories import WorkflowRepository
@@ -82,6 +86,24 @@ class WorkflowManager:
         self._dispatcher: asyncio.Task[None] | None = None
         self._dispatcher_wake = asyncio.Event()
         self._closing = False
+        bind = getattr(tools, "bind_workflow_steps", None)
+        if bind is not None:
+            bind(self)  # Tool Runtime asks this manager what a running step may call
+
+    async def workflow_step_grant(self, workflow_id: UUID, step_id: str) -> WorkflowStepGrant | None:
+        """The stored contract of one step, read from storage rather than from the caller."""
+        run = await self._repository.get_run(workflow_id)
+        step = next((task for task in run.tasks if task.task_id == step_id), None) if run is not None else None
+        if run is None or step is None:
+            return None
+        tool_name = step.configuration.get("tool_name")
+        arguments = step.configuration.get("tool_arguments", {})
+        return WorkflowStepGrant(
+            tool_name=tool_name if isinstance(tool_name, str) else "",
+            arguments=arguments if isinstance(arguments, Mapping) else {},
+            running=step.status is WorkflowTaskStatus.RUNNING,
+            attempt=run.attempt,
+        )
 
     # ---------------------------------------------------------------- definitions
 
@@ -406,12 +428,16 @@ class WorkflowManager:
             workflow = await self._save(workflow, workflow.with_task(task))
         await self._publish("workflow.task.started", workflow, task)
         try:
-            result = await self._tools.execute(tool_name=str(task.configuration["tool_name"]), arguments=task.configuration.get("tool_arguments", {}), metadata={"workflow_id": str(workflow_id), "workflow_task_id": task_id, "workflow_attempt": workflow.attempt})
+            result = await self._tools.execute(
+                tool_name=str(task.configuration["tool_name"]),
+                arguments=task.configuration.get("tool_arguments", {}),
+                context=WorkflowToolContext(workflow_id=workflow_id, step_id=task_id, attempt=workflow.attempt),
+            )
             successful = result.status is TaskStatus.COMPLETED
             updated = task.with_updates(status=WorkflowTaskStatus.COMPLETED if successful else WorkflowTaskStatus.FAILED, result=result.result.output if result.result else None, error=None if successful else (result.result.error if result.result else "Tool task failed"), finished_at=utc_now())
         except asyncio.CancelledError:
             raise  # the step stays RUNNING in storage; recovery decides what it means
-        except Exception as error:
+        except Exception as error:  # includes ToolAuthorizationError: the step fails, the tool never ran
             updated = task.with_updates(status=WorkflowTaskStatus.FAILED, error=str(error), finished_at=utc_now())
         async with self._lock:
             workflow = await self.get(workflow_id)
@@ -456,6 +482,11 @@ class WorkflowManager:
                     self._tools.get_tool(tool_name)
                 except Exception as error:
                     raise WorkflowValidationError(f"Task {task.task_id!r} uses unknown tool {tool_name!r}.") from error
+            arguments = task.configuration.get("tool_arguments", {})
+            if not isinstance(arguments, Mapping):
+                raise WorkflowValidationError(f"Task {task.task_id!r} has tool_arguments that aren't an object.")
+            if hasattr(self._tools, "arguments_are_valid") and not self._tools.arguments_are_valid(tool_name, arguments):
+                raise WorkflowValidationError(f"Task {task.task_id!r} has arguments that {tool_name!r} doesn't accept.")
         visiting, visited = set(), set()
         def visit(task_id: str) -> None:
             if task_id in visiting: raise WorkflowValidationError("Workflow dependencies contain a cycle.")

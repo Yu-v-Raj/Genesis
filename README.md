@@ -642,8 +642,8 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. If port 3000 is busy, Next.js uses 3001; in development the
-backend accepts any localhost port.
+Open `http://localhost:3000`. If port 3000 is busy, Next.js uses 3001, which the backend
+also accepts. Other origins are refused: set `CORS_ORIGINS` to serve the frontend elsewhere.
 
 ## 7. Create an Agent and chat
 

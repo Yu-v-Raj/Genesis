@@ -5,6 +5,7 @@ from collections import Counter
 
 import pytest
 
+from backend.app.core.approval_gateway.domain.approval import ApprovalDecision, ApprovalRequest, ApprovalStatus
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.tool_runtime.application.tool_executor import ToolExecutor
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
@@ -20,7 +21,17 @@ from backend.app.core.workflow_runtime.domain.models import WorkflowStatus as RS
 from backend.app.core.workflow_runtime.infrastructure.sqlalchemy_repository import SqlAlchemyWorkflowRepository
 
 
+class ApprovedForThisTest:
+    """Stands in for a Milestone 2 approval decision so the crash-recovery path of a
+    side-effecting tool can still be exercised. Production wires no approval gateway, so
+    outside tests like this one such tools are held as approval_required."""
+
+    async def decide(self, request: ApprovalRequest) -> ApprovalDecision:
+        return ApprovalDecision(status=ApprovalStatus.APPROVED, approval_id=f"test-approval:{request.tool_name}")
+
+
 LEASE = 0.2
+STEP_SCHEMA = {"type": "object", "properties": {"step": {"type": "string"}}, "required": ["step"]}
 
 
 class Gate:
@@ -36,7 +47,7 @@ class Gate:
 async def tools(gate: Gate) -> ToolRuntimeManager:
     bus = EventBus()
     registry = ToolRegistry(bus)
-    manager = ToolRuntimeManager(registry, ToolExecutor(registry, bus), bus)
+    manager = ToolRuntimeManager(registry, ToolExecutor(registry, bus), bus, approvals=ApprovedForThisTest())
 
     def handler(name: str):
         async def run(request: ToolRequest) -> ToolResult:
@@ -50,7 +61,7 @@ async def tools(gate: Gate) -> ToolRuntimeManager:
     for name, side_effects in (("transform", False), ("external_call", True)):
         await manager.register(
             Tool(
-                definition=ToolMetadata(name=name, description=f"{name} step", side_effects=side_effects),
+                definition=ToolMetadata(name=name, description=f"{name} step", side_effects=side_effects, parameters=STEP_SCHEMA),
                 handler=handler(name),
             )
         )

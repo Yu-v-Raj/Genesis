@@ -18,8 +18,8 @@ from backend.app.core.core_services.config.constants import (
     DEFAULT_HOST,
     DEFAULT_LOG_LEVEL,
     DEFAULT_PORT,
+    DEFAULT_TRUSTED_HOSTS,
     ENV_FILE,
-    LOCAL_DEVELOPMENT_ORIGIN_REGEX,
     PROJECT_ROOT,
 )
 
@@ -46,6 +46,7 @@ class Settings(BaseSettings):
         gt=0,
     )
     CORS_ORIGINS: list[str] = Field(default_factory=lambda: list(DEFAULT_CORS_ORIGINS))
+    TRUSTED_HOSTS: list[str] = Field(default_factory=lambda: list(DEFAULT_TRUSTED_HOSTS))
     DATABASE_URL: str = DEFAULT_DATABASE_URL
     # Durable work (v0.12): how long a worker's claim on a task lasts without renewal, and
     # how many executions / workflow runs one process works on at once.
@@ -81,11 +82,6 @@ class Settings(BaseSettings):
         return url.set(database=str((PROJECT_ROOT / database).resolve())).render_as_string(
             hide_password=False
         )
-
-    @property
-    def cors_origin_regex(self) -> str | None:
-        """Allow any loopback frontend port only while developing locally."""
-        return LOCAL_DEVELOPMENT_ORIGIN_REGEX if self.ENVIRONMENT == "development" else None
 
 
 settings = Settings()

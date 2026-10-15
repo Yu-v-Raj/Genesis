@@ -8,9 +8,13 @@ from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.tool_runtime.application.tool_executor import ToolExecutor
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
+from backend.app.core.tool_runtime.domain.authorization import OperatorTestContext
 from backend.app.core.tool_runtime.domain.exceptions import DuplicateToolError
 from backend.app.core.tool_runtime.domain.task import TaskStatus
 from backend.app.core.tool_runtime.domain.tool import builtin_tools
+
+
+TEST = OperatorTestContext()
 
 
 async def _manager() -> tuple[ToolRuntimeManager, list[str]]:
@@ -29,10 +33,10 @@ async def test_builtins_execute_with_safe_deterministic_contracts() -> None:
     """Built-ins return their expected outputs without external capabilities."""
     manager, events = await _manager()
 
-    echo = await manager.execute(tool_name="echo", arguments={"message": "Hello"})
-    calculation = await manager.execute(tool_name="calculator", arguments={"expression": "2 + 5 * 10"})
-    identifier = await manager.execute(tool_name="uuid")
-    random_number = await manager.execute(tool_name="random_number", arguments={"min": 4, "max": 4})
+    echo = await manager.execute(tool_name="echo", arguments={"message": "Hello"}, context=TEST)
+    calculation = await manager.execute(tool_name="calculator", arguments={"expression": "2 + 5 * 10"}, context=TEST)
+    identifier = await manager.execute(tool_name="uuid", context=TEST)
+    random_number = await manager.execute(tool_name="random_number", arguments={"min": 4, "max": 4}, context=TEST)
 
     assert echo.result is not None and echo.result.output == "Hello"
     assert calculation.result is not None and calculation.result.output == 52
@@ -45,9 +49,9 @@ async def test_builtins_execute_with_safe_deterministic_contracts() -> None:
 async def test_validation_failure_is_recorded_and_history_is_bounded() -> None:
     """Invalid requests become failed tasks while history remains newest-first and bounded."""
     manager, _ = await _manager()
-    invalid = await manager.execute(tool_name="calculator", arguments={"expression": "__import__('os')"})
-    second = await manager.execute(tool_name="echo", arguments={"message": "two"})
-    third = await manager.execute(tool_name="echo", arguments={"message": "three"})
+    invalid = await manager.execute(tool_name="calculator", arguments={"expression": "__import__('os')"}, context=TEST)
+    second = await manager.execute(tool_name="echo", arguments={"message": "two"}, context=TEST)
+    third = await manager.execute(tool_name="echo", arguments={"message": "three"}, context=TEST)
 
     assert invalid.result is not None and invalid.result.error is not None
     assert [task.task_id for task in manager.history()] == [third.task_id, second.task_id]
@@ -65,7 +69,7 @@ async def test_registry_prevents_duplicate_builtin_registration() -> None:
 async def test_cancelled_execution_records_terminal_failed_task() -> None:
     """Cancelling the caller mid-invocation leaves a failed snapshot, never a stuck running task."""
     manager, events = await _manager()
-    invocation = asyncio.create_task(manager.execute(tool_name="delay", arguments={"seconds": 3}))
+    invocation = asyncio.create_task(manager.execute(tool_name="delay", arguments={"seconds": 3}, context=TEST))
     while not manager.history() or manager.history()[0].status is not TaskStatus.RUNNING:
         await asyncio.sleep(0)
 

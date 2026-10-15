@@ -28,3 +28,11 @@ class ToolDisabledError(ToolRuntimeError):
 
 class ToolValidationError(ToolRuntimeError):
     """Raised when supplied tool arguments are invalid."""
+
+
+class ToolSchemaError(ToolRuntimeError):
+    """Raised when a Tool declares a parameter schema Genesis can't enforce."""
+
+    def __init__(self, tool_name: str, problems: list[str]) -> None:
+        super().__init__(f"Tool '{tool_name}' has an invalid parameter schema: " + " ".join(problems))
+        self.problems = tuple(problems)

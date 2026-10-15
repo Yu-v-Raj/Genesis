@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from backend.app.core.approval_gateway.domain.approval import ApprovalDecision, ApprovalRequest, ApprovalStatus
 from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
@@ -34,6 +35,15 @@ from backend.app.core.tool_runtime.domain.tool_metadata import ToolMetadata
 from backend.app.core.tool_runtime.domain.tool_request import ToolRequest
 from backend.app.core.tool_runtime.domain.tool_result import ToolResult
 from backend.app.core.tool_runtime.domain.tool_status import ToolResultStatus
+
+
+class ApprovedForThisTest:
+    """Stands in for a Milestone 2 approval decision so the crash-recovery path of a
+    side-effecting tool can still be exercised. Production wires no approval gateway, so
+    outside tests like this one such tools are held as approval_required."""
+
+    async def decide(self, request: ApprovalRequest) -> ApprovalDecision:
+        return ApprovalDecision(status=ApprovalStatus.APPROVED, approval_id=f"test-approval:{request.tool_name}")
 
 
 LEASE = 0.2
@@ -79,7 +89,7 @@ class Runtime:
         self.registry = AgentRegistry(bus, SqlAlchemyAgentRepository(factory))
         self.agents = AgentManager(self.registry, bus, SqlAlchemySessionRepository(factory))
         tool_registry = ToolRegistry(bus)
-        self.tools = ToolRuntimeManager(tool_registry, ToolExecutor(tool_registry, bus), bus)
+        self.tools = ToolRuntimeManager(tool_registry, ToolExecutor(tool_registry, bus), bus, approvals=ApprovedForThisTest())
         providers = LLMProviderRegistry()
         providers.register(Provider(gate))
         self.interaction = AgentInteractionService(self.registry, self.agents, LLMManager(providers, bus), tool_manager=self.tools)
@@ -96,7 +106,7 @@ class Runtime:
                 await self.gate.release.wait()
             return ToolResult(status=ToolResultStatus.COMPLETED, output="sent")
 
-        await self.tools.register(Tool(definition=ToolMetadata(name="send_email", description="Send an email.", side_effects=True), handler=send_email))
+        await self.tools.register(Tool(definition=ToolMetadata(name="send_email", description="Send an email.", side_effects=True, parameters={"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]}), handler=send_email))
         await self.agents.restore_agents()
         return self
 

@@ -16,7 +16,6 @@ from backend.app.core.agent_runtime.domain.exceptions import (
     SessionNotFoundError,
 )
 from backend.app.core.agent_runtime.domain.session import AgentSession, AgentSessionSummary
-from backend.app.core.observability.domain.events import ToolRejected
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.llm_runtime.domain.models import LLMModel, Message
 from backend.app.core.core_services.event_bus import EventBus
@@ -186,14 +185,6 @@ class AgentManager:
                     llm_model=llm_model, allowed_tools=allowed_tools, instructions=instructions
                 )
             )
-
-    async def publish_tool_rejected(
-        self, *, agent_id: UUID, interaction_id: UUID, tool_name: str, category: str
-    ) -> None:
-        await self._event_bus.publish(ToolRejected(source="agent_safety_gate", payload={
-            "agent_id": str(agent_id), "interaction_id": str(interaction_id),
-            "tool_name": tool_name, "category": category,
-        }))
 
     async def fail_agent(self, agent_id: UUID) -> Agent:
         """Transition a RUNNING Agent to FAILED."""

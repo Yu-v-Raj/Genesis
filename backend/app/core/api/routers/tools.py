@@ -3,10 +3,17 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 
 from backend.app.core.api.dependencies.system import get_tool_runtime_manager
 from backend.app.core.api.schemas.tools import ToolCapabilitiesResponse, ToolExecuteRequest, ToolHistoryResponse, ToolListResponse, ToolResponse, TaskResponse
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
+from backend.app.core.tool_runtime.domain.authorization import (
+    AuthorizationOutcome,
+    DenialReason,
+    OperatorTestContext,
+    ToolAuthorizationError,
+)
 from backend.app.core.tool_runtime.domain.exceptions import ToolNotFoundError
 
 
@@ -37,10 +44,47 @@ def get_tool(tool_name: str, manager: ToolManagerDependency) -> ToolResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
 
+_DENIAL_STATUS = {
+    AuthorizationOutcome.UNAVAILABLE: status.HTTP_409_CONFLICT,
+    AuthorizationOutcome.NOT_ALLOWED: status.HTTP_403_FORBIDDEN,
+    AuthorizationOutcome.INVALID_REQUEST: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    AuthorizationOutcome.APPROVAL_REQUIRED: status.HTTP_403_FORBIDDEN,
+}
+
+
 @router.post("/execute", response_model=TaskResponse)
-async def execute_tool(request: ToolExecuteRequest, manager: ToolManagerDependency) -> TaskResponse:
-    task = await manager.execute(tool_name=request.tool_name, arguments=request.arguments, metadata=request.metadata, execution_id=request.execution_id)
+async def execute_tool(request: ToolExecuteRequest, manager: ToolManagerDependency) -> TaskResponse | JSONResponse:
+    """Run one tool as an operator test. Genesis does not authenticate operators, so the
+    call gets no identity and only what the policy allows any test run."""
+    if request.execution_id is not None:
+        # Attaching a test run to an execution would make it look like an Agent's call.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Test runs can't be attached to an execution.",
+        )
+    try:
+        task = await manager.execute(
+            tool_name=request.tool_name,
+            arguments=request.arguments,
+            metadata=request.metadata,
+            context=OperatorTestContext(),
+        )
+    except ToolAuthorizationError as error:
+        decision = error.decision
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if decision.reason is DenialReason.TOOL_NOT_FOUND
+            else _DENIAL_STATUS.get(decision.outcome, status.HTTP_403_FORBIDDEN)
+        )
+        # `detail` stays a readable string; `outcome` and `reason` are stable codes.
+        return JSONResponse(
+            status_code=code,
+            content={
+                "detail": decision.message,
+                "outcome": decision.outcome.value,
+                "reason": decision.reason.value if decision.reason is not None else None,
+            },
+        )
     if task.result is not None and task.result.error is not None:
-        status_code = status.HTTP_404_NOT_FOUND if "was not found" in task.result.error else status.HTTP_422_UNPROCESSABLE_CONTENT
-        raise HTTPException(status_code=status_code, detail=task.result.error)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=task.result.error)
     return TaskResponse.from_task(task)

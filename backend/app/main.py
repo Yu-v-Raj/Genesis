@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from backend.app.core.api.local_request_guard import LocalRequestGuard
 from backend.app.core.api.router import api_router
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
@@ -233,10 +234,16 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+# Added last, so it runs first: refuses untrusted Host headers and cross-site
+# state-changing requests before CORS or any route sees them.
+app.add_middleware(
+    LocalRequestGuard,
+    trusted_hosts=lambda: settings.TRUSTED_HOSTS,
+    trusted_origins=lambda: settings.CORS_ORIGINS,
 )
 
 app.include_router(api_router)

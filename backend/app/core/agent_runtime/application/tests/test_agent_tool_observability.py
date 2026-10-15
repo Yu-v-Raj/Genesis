@@ -90,8 +90,14 @@ async def test_safety_rejections_publish_only_safe_metadata() -> None:
     _, _, summary = await service.chat_with_summary(agent.id, "Try tools")
 
     rejected = [event for event in events if event.event_type == "tool.rejected"]
-    assert [event.payload["category"] for event in rejected] == ["unavailable", "not_allowed", "invalid_arguments"]
+    assert [event.payload["category"] for event in rejected] == ["unavailable", "not_allowed", "invalid_request"]
+    assert [event.payload["reason"] for event in rejected] == ["tool_not_found", "tool_not_granted", "invalid_arguments"]
     assert all(event.payload["agent_id"] == str(agent.id) for event in rejected)
     assert all(event.payload["interaction_id"] == str(summary.interaction_id) for event in rejected)
-    assert all(set(event.payload) == {"agent_id", "interaction_id", "tool_name", "category"} for event in rejected)
+    # Identifiers and stable codes only: the arguments ("do-not-broadcast") are never included.
+    assert all(
+        set(event.payload) == {"caller", "agent_id", "interaction_id", "tool_name", "category", "reason"}
+        and event.payload["caller"] == "agent"
+        for event in rejected
+    )
     assert [activity.status for activity in summary.tool_activities] == ["rejected", "rejected", "rejected"]

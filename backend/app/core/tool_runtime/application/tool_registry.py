@@ -4,10 +4,12 @@ from threading import RLock
 
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.observability.domain.events import ToolRegistered
+from backend.app.core.tool_runtime.domain.argument_schema import schema_problems
 from backend.app.core.tool_runtime.domain.exceptions import (
     DuplicateToolError,
     ToolDisabledError,
     ToolNotFoundError,
+    ToolSchemaError,
 )
 from backend.app.core.tool_runtime.domain.tool import Tool
 
@@ -21,7 +23,14 @@ class ToolRegistry:
         self._lock = RLock()
 
     async def register(self, tool: Tool) -> Tool:
-        """Register a Tool and publish its registration."""
+        """Register a Tool and publish its registration.
+
+        A schema the argument validator can't enforce is refused here, at startup, rather
+        than leaving a tool that looks usable but rejects every call.
+        """
+        problems = schema_problems(tool.definition.parameters)
+        if problems:
+            raise ToolSchemaError(tool.name, problems)
         with self._lock:
             if tool.name in self._tools:
                 raise DuplicateToolError(tool.name)

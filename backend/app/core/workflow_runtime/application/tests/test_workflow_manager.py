@@ -14,7 +14,7 @@ from backend.app.core.workflow_runtime.domain.models import WorkflowStatus, Work
 
 
 class Tools:
-    async def execute(self, *, tool_name, arguments, metadata):
+    async def execute(self, *, tool_name, arguments, context):
         await asyncio.sleep(arguments.get("delay", 0))
         class Result: status = TaskStatus.COMPLETED; result = type("Output", (), {"output": {"tool": tool_name}, "error": None})()
         return Result()

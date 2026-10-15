@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from backend.app.core.execution_runtime.domain.execution import Execution
 from backend.app.core.execution_runtime.domain.execution_context import ExecutionContext
 from backend.app.core.execution_runtime.domain.work import RecoveryVerdict, WorkHandler, WorkOutcome
+from backend.app.core.tool_runtime.domain.authorization import AgentToolContext, ToolAuthorizationError
 
 if TYPE_CHECKING:
     from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
@@ -16,8 +17,9 @@ class ExecutionExecutor:
     """Route each execution to the code that performs it.
 
     ``metadata["kind"]`` selects a registered ``WorkHandler`` (for example ``"chat"``).
-    Without a kind, ``metadata["tool_name"]`` runs one tool through Tool Runtime, and
-    anything else runs the deterministic placeholder.
+    Without a kind, ``metadata["tool_name"]`` runs one tool through Tool Runtime on behalf
+    of the execution's Agent, so the Agent's allowed tools and the full tool policy apply.
+    Anything else runs the deterministic placeholder.
     """
 
     def __init__(self, delay_seconds: float = 2.0) -> None:
@@ -67,6 +69,8 @@ class ExecutionExecutor:
         handler = self._handler(metadata)
         if handler is not None:
             return handler.error_category(error)
+        if isinstance(error, ToolAuthorizationError):
+            return "tool_denied"
         return "tool_failed" if "tool_name" in metadata else "execution_failed"
 
     async def reconcile(self, execution: Execution) -> RecoveryVerdict:
@@ -88,7 +92,7 @@ class ExecutionExecutor:
             task = await self._tool_manager.execute(
                 tool_name=tool_name,
                 arguments=arguments if isinstance(arguments, dict) else {},
-                execution_id=context.execution_id,
+                context=AgentToolContext(agent_id=context.agent_id, execution_id=context.execution_id),
             )
             if task.result is None or task.result.error is not None:
                 raise RuntimeError(task.result.error if task.result is not None else "Tool task failed.")

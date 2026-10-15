@@ -50,6 +50,12 @@ def isolated_database(
     yield url
 
 
+@pytest.fixture(autouse=True)
+def trust_test_client_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FastAPI's TestClient sends ``Host: testserver``; trust it in tests only."""
+    monkeypatch.setattr(settings, "TRUSTED_HOSTS", [*settings.TRUSTED_HOSTS, "testserver"])
+
+
 @pytest.fixture(params=BACKENDS)
 def database_url(request: pytest.FixtureRequest, isolated_database: str) -> str:
     if request.param == "sqlite":

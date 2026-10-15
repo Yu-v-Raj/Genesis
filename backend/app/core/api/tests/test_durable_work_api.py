@@ -63,7 +63,7 @@ def test_failed_and_cancelled_work_can_be_retried_but_finished_work_cannot() -> 
         agent_id = ready_agent(client)
         failing = client.post(f"/api/agents/{agent_id}/execute", json={"metadata": {"tool_name": "not_a_tool"}}).json()
         failed = wait_for(client, f"/api/executions/{failing['execution_id']}", "failed")
-        assert failed["error_category"] == "tool_failed"
+        assert failed["error_category"] == "tool_denied"  # an unknown tool is refused before anything runs
         assert failed["retry"] == {"allowed": True, "requires_acknowledgement": False, "reason": "Retrying starts a new attempt with the same input."}
 
         retried = client.post(f"/api/executions/{failing['execution_id']}/retry", json={})

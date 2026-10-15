@@ -208,6 +208,6 @@ async def test_unregistered_tool_work_fails_safely_through_tool_runtime(session_
     execution = await a.executions.execute(agent_id, metadata={"tool_name": "delete_everything"})
     failed = await wait_for(a.executions, execution.execution_id, S.FAILED)
 
-    assert failed.error_category == "tool_failed"
+    assert failed.error_category == "tool_denied"  # refused by the tool policy; nothing ran
     assert executor.may_have_side_effects({"tool_name": "delete_everything"})  # unknown => assume effects
     await a.executions.shutdown()

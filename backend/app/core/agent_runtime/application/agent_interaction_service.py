@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.context_assembler import AgentContextAssembler
-from backend.app.core.agent_runtime.application.tool_safety_gate import ToolSafetyGate
+from backend.app.core.agent_runtime.application.tool_grants import AgentRegistryToolGrants
 from backend.app.core.agent_runtime.domain.agent import Agent
 from backend.app.core.agent_runtime.domain.exceptions import AgentLifecycleError, AgentUnavailableError
 from backend.app.core.agent_runtime.domain.status import AgentStatus
@@ -28,6 +28,12 @@ from backend.app.core.llm_runtime.domain.models import (
     ToolResult,
 )
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
+from backend.app.core.tool_runtime.domain.authorization import (
+    AgentToolContext,
+    AuthorizationOutcome,
+    ToolAuthorizationDecision,
+    ToolAuthorizationError,
+)
 from backend.app.core.tool_runtime.domain.tool_status import ToolResultStatus
 
 
@@ -57,6 +63,10 @@ class AgentInteractionService:
         self._llm_manager = llm_manager
         self._context_assembler = context_assembler or AgentContextAssembler()
         self._tool_manager = tool_manager
+        if tool_manager is not None:
+            # The Agent registry is the authority on what each Agent may use; Tool Runtime
+            # asks it on every call instead of trusting what the caller claims.
+            tool_manager.bind_agent_grants(AgentRegistryToolGrants(agent_registry))
         self._max_tool_iterations = max_tool_iterations
         self._memory = memory
 
@@ -214,20 +224,13 @@ class AgentInteractionService:
             )
             activity = ToolActivity(tool_name=tool_call.name, status="failed", error="Tool runtime is unavailable.")
         else:
-            _, rejection, category = ToolSafetyGate(self._tool_manager).validate(
-                tool_name=tool_call.name,
-                arguments=tool_call.arguments,
-                allowed_tools=agent.allowed_tools,
+            context = AgentToolContext(agent_id=agent.id, interaction_id=interaction_id, execution_id=execution_id)
+            # Decide before the checkpoint below, so a refused call is never recorded as started.
+            decision = await self._tool_manager.authorize(
+                tool_name=tool_call.name, arguments=tool_call.arguments, context=context
             )
-            if rejection is not None:
-                await self._agent_manager.publish_tool_rejected(
-                    agent_id=agent.id, interaction_id=interaction_id, tool_name=tool_call.name, category=category or "unavailable"
-                )
-                result = ToolResult(
-                    tool_name=tool_call.name,
-                    result={"success": False, "error": rejection},
-                )
-                activity = ToolActivity(tool_name=tool_call.name, status="rejected", error=rejection)
+            if not decision.allowed:
+                result, activity = _rejected(tool_call.name, decision)
             else:
                 if progress is not None and started is not None:
                     # Checkpoint before the call: if the process dies during it, recovery
@@ -240,10 +243,7 @@ class AgentInteractionService:
                     await progress({"step": f"tool:{tool_call.name}", "tools_started": list(started)})
                 try:
                     task = await self._tool_manager.execute(
-                        tool_name=tool_call.name,
-                        arguments=tool_call.arguments,
-                        metadata={"agent_id": str(agent.id), "interaction_id": str(interaction_id)},
-                        execution_id=execution_id,
+                        tool_name=tool_call.name, arguments=tool_call.arguments, context=context
                     )
                     execution_result = task.result
                     if execution_result is None or execution_result.status is not ToolResultStatus.COMPLETED:
@@ -263,6 +263,9 @@ class AgentInteractionService:
                             result={"success": True, "result": execution_result.output},
                         )
                         activity = ToolActivity(tool_name=tool_call.name, status="completed", result=execution_result.output, duration=execution_result.duration)
+                except ToolAuthorizationError as error:
+                    # The Agent or tool changed between the check above and the call.
+                    result, activity = _rejected(tool_call.name, error.decision)
                 except Exception:
                     result = ToolResult(
                         tool_name=tool_call.name,
@@ -278,6 +281,24 @@ class AgentInteractionService:
                 "tool_status": activity.status,
             },
         ), activity
+
+
+# What the model is told when a call is refused: generic, so it learns nothing about
+# other Agents' tools or the policy's internals.
+_REJECTION_MESSAGES = {
+    AuthorizationOutcome.UNAVAILABLE: "Requested tool is unavailable.",
+    AuthorizationOutcome.NOT_ALLOWED: "Requested tool is not allowed.",
+    AuthorizationOutcome.INVALID_REQUEST: "Tool arguments are invalid.",
+    AuthorizationOutcome.APPROVAL_REQUIRED: "Requested tool needs a person's approval, which is not available.",
+}
+
+
+def _rejected(tool_name: str, decision: ToolAuthorizationDecision) -> tuple[ToolResult, ToolActivity]:
+    message = _REJECTION_MESSAGES.get(decision.outcome, "Requested tool is not allowed.")
+    return (
+        ToolResult(tool_name=tool_name, result={"success": False, "error": message}),
+        ToolActivity(tool_name=tool_name, status="rejected", error=message),
+    )
 
 
 _BUSY_MESSAGE = "This Agent is already working on a request. Wait for it to finish, then try again."

@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import math
 import operator
 import random
 from collections.abc import Awaitable, Callable, Mapping
@@ -71,26 +72,89 @@ _UNARY_OPERATORS: dict[type[ast.unaryop], Callable[[int | float], int | float]] 
 }
 
 
+# Limits that keep every calculation cheap. Tools run on the server's event loop, so an
+# expensive expression must be refused before it is computed, not interrupted afterwards.
+MAX_EXPRESSION_LENGTH = 200
+MAX_EXPRESSION_NODES = 64
+MAX_EXPRESSION_DEPTH = 16
+MAX_EXPONENT = 100
+MAX_INTEGER_BITS = 4096  # about 1,230 decimal digits
+
+
+def _check_shape(root: ast.AST) -> None:
+    """Reject oversized or unsupported expressions before any arithmetic runs."""
+    nodes = 0
+    pending: list[tuple[ast.AST, int]] = [(root, 1)]
+    while pending:
+        node, depth = pending.pop()
+        nodes += 1
+        if nodes > MAX_EXPRESSION_NODES or depth > MAX_EXPRESSION_DEPTH:
+            raise ToolValidationError("Expression is too complex.")
+        if isinstance(node, ast.Constant):
+            if not isinstance(node.value, (int, float)) or isinstance(node.value, bool):
+                raise ToolValidationError("Expression contains unsupported arithmetic.")
+        elif isinstance(node, ast.BinOp) and type(node.op) in _OPERATORS:
+            pending += [(node.left, depth + 1), (node.right, depth + 1)]
+        elif isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
+            pending.append((node.operand, depth + 1))
+        else:
+            raise ToolValidationError("Expression contains unsupported arithmetic.")
+
+
+def _check_cost(op: ast.operator, left: int | float, right: int | float) -> None:
+    """Refuse an operation whose result would be too large, before computing it."""
+    if isinstance(op, ast.Pow):
+        if abs(right) > MAX_EXPONENT:
+            raise ToolValidationError("Exponent is outside the supported range.")
+        if isinstance(left, int) and isinstance(right, int) and right > 0 and max(left.bit_length(), 1) * right > MAX_INTEGER_BITS:
+            raise ToolValidationError("Result is too large.")
+    elif isinstance(op, ast.Mult) and isinstance(left, int) and isinstance(right, int):
+        if left.bit_length() + right.bit_length() > MAX_INTEGER_BITS:
+            raise ToolValidationError("Result is too large.")
+
+
+def _bounded(value: object) -> int | float:
+    """Every intermediate result must be a finite real number of bounded size."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ToolValidationError("Result is not a real number.")
+    if isinstance(value, int) and value.bit_length() > MAX_INTEGER_BITS:
+        raise ToolValidationError("Result is too large.")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ToolValidationError("Result is too large.")
+    return value
+
+
 def _calculate(node: ast.AST) -> int | float:
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
-        return node.value
+        return _bounded(node.value)
     if isinstance(node, ast.BinOp) and type(node.op) in _OPERATORS:
         left, right = _calculate(node.left), _calculate(node.right)
-        if isinstance(node.op, ast.Pow) and abs(right) > 100:
-            raise ToolValidationError("Exponent is outside the supported range.")
-        return _OPERATORS[type(node.op)](left, right)
+        _check_cost(node.op, left, right)
+        return _bounded(_OPERATORS[type(node.op)](left, right))
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
-        return _UNARY_OPERATORS[type(node.op)](_calculate(node.operand))
+        return _bounded(_UNARY_OPERATORS[type(node.op)](_calculate(node.operand)))
     raise ToolValidationError("Expression contains unsupported arithmetic.")
 
 
-async def _calculator(request: ToolRequest) -> ToolResult:
-    expression = _required_string(request.arguments, "expression")
+def evaluate_expression(expression: str) -> int | float:
+    """Safely evaluate bounded arithmetic, or raise ToolValidationError."""
+    if len(expression) > MAX_EXPRESSION_LENGTH:
+        raise ToolValidationError(f"Expression is longer than {MAX_EXPRESSION_LENGTH} characters.")
     try:
         parsed = ast.parse(expression, mode="eval")
-        output = _calculate(parsed.body)
-    except (SyntaxError, ZeroDivisionError) as error:
+    except (SyntaxError, RecursionError, MemoryError) as error:
         raise ToolValidationError("Expression is not valid safe arithmetic.") from error
+    _check_shape(parsed.body)
+    try:
+        return _calculate(parsed.body)
+    except ZeroDivisionError as error:
+        raise ToolValidationError("Expression is not valid safe arithmetic.") from error
+    except OverflowError as error:  # e.g. an int too large to convert to float
+        raise ToolValidationError("Result is too large.") from error
+
+
+async def _calculator(request: ToolRequest) -> ToolResult:
+    output = evaluate_expression(_required_string(request.arguments, "expression"))
     return ToolResult(status=ToolResultStatus.COMPLETED, output=output)
 
 
