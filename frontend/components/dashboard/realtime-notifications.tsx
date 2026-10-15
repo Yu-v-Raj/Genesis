@@ -27,7 +27,6 @@ const NOTIFIABLE_EVENTS = new Set([
   "memory.created",
   "memory.updated",
   "memory.deleted",
-  "memory.retrieved",
   "error.occurred",
   "agent.created",
   "agent.started",
@@ -95,8 +94,6 @@ export function RealtimeNotifications({
     timersRef.current.clear();
   }, []);
 
-  if (notifications.length === 0) return null;
-
   function notificationTitle(event: RealtimeEvent): string {
     const titles: Record<string, string> = {
       "execution.created": "Execution created",
@@ -111,7 +108,6 @@ export function RealtimeNotifications({
       "memory.created": "Memory created",
       "memory.updated": "Memory updated",
       "memory.deleted": "Memory deleted",
-      "memory.retrieved": "Memory retrieved",
       "workflow.created": "Workflow created",
       "workflow.queued": "Workflow queued",
       "workflow.started": "Workflow started",
@@ -129,26 +125,25 @@ export function RealtimeNotifications({
   }
 
   function notificationIcon(event: RealtimeEvent) {
-    if (event.event_type === "error.occurred" || event.event_type === "execution.failed" || event.event_type === "tool.failed" || event.event_type === "workflow.failed" || event.event_type === "workflow.task.failed") return <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />;
-    if (event.event_type === "execution.cancelled") return <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />;
-    if (event.event_type === "execution.completed" || event.event_type === "tool.completed" || event.event_type === "workflow.completed" || event.event_type === "workflow.task.completed") return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
-    if (event.event_type.startsWith("agent.")) return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />;
-    return <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />;
+    if (event.event_type === "error.occurred" || event.event_type.endsWith(".failed")) return <CircleAlert aria-hidden className="tone-danger tone-fg mt-0.5 h-4 w-4 shrink-0" />;
+    if (event.event_type.endsWith(".cancelled")) return <Info aria-hidden className="tone-warning tone-fg mt-0.5 h-4 w-4 shrink-0" />;
+    if (event.event_type.endsWith(".completed") || event.event_type.startsWith("agent.")) return <CheckCircle2 aria-hidden className="tone-success tone-fg mt-0.5 h-4 w-4 shrink-0" />;
+    return <Info aria-hidden className="tone-info tone-fg mt-0.5 h-4 w-4 shrink-0" />;
   }
 
   return (
-    <div className="fixed right-4 top-4 z-50 flex w-[calc(100%-2rem)] max-w-sm flex-col gap-2 sm:right-5 sm:top-5 sm:w-80">
+    // Top-right, just below the top bar so its search and version stay visible, and clear of the
+    // conversation composer at the bottom of the Agents page.
+    <div role="status" aria-live="polite" className="pointer-events-none fixed right-4 top-[4.25rem] z-40 flex w-[calc(100%-2rem)] max-w-sm flex-col gap-2 sm:right-5 sm:w-80">
       <AnimatePresence initial={false}>
       {notifications.map((event) => (
-        <motion.div key={event.id} initial={{ opacity: 0, y: -8, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, x: 12, scale: 0.98 }} transition={{ duration: 0.18 }} className="flex gap-3 rounded-xl border border-border bg-surface/95 p-3.5 shadow-xl shadow-black/20 backdrop-blur">
+        <motion.div key={event.id} initial={{ opacity: 0, y: -8, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, x: 12, scale: 0.98 }} transition={{ duration: 0.18 }} className="pointer-events-auto flex gap-3 rounded-lg border border-border bg-elevated/95 p-3 shadow-overlay backdrop-blur">
           {notificationIcon(event)}
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium text-foreground">
-              {notificationTitle(event)}
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">Received from {event.source}</p>
+            <p className="text-xs font-medium text-foreground">{notificationTitle(event)}</p>
+            <time dateTime={event.timestamp} className="mt-0.5 block text-[11px] text-muted-foreground">{new Date(event.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time>
           </div>
-          <button type="button" onClick={() => dismiss(event.id)} className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground" aria-label="Dismiss notification"><X className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={() => dismiss(event.id)} className="-m-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground pointer-coarse:h-10 pointer-coarse:w-10" aria-label="Dismiss notification"><X aria-hidden className="h-3.5 w-3.5" /></button>
         </motion.div>
       ))}
       </AnimatePresence>

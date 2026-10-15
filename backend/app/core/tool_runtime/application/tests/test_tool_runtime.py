@@ -1,5 +1,7 @@
 """Coverage for deterministic Tool Runtime registration and invocation."""
 
+import asyncio
+
 import pytest
 
 from backend.app.core.core_services.event_bus import EventBus
@@ -7,6 +9,7 @@ from backend.app.core.tool_runtime.application.tool_executor import ToolExecutor
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
 from backend.app.core.tool_runtime.domain.exceptions import DuplicateToolError
+from backend.app.core.tool_runtime.domain.task import TaskStatus
 from backend.app.core.tool_runtime.domain.tool import builtin_tools
 
 
@@ -56,3 +59,23 @@ async def test_registry_prevents_duplicate_builtin_registration() -> None:
     manager, _ = await _manager()
     with pytest.raises(DuplicateToolError):
         await manager.register(builtin_tools()[0])
+
+
+@pytest.mark.asyncio
+async def test_cancelled_execution_records_terminal_failed_task() -> None:
+    """Cancelling the caller mid-invocation leaves a failed snapshot, never a stuck running task."""
+    manager, events = await _manager()
+    invocation = asyncio.create_task(manager.execute(tool_name="delay", arguments={"seconds": 3}))
+    while not manager.history() or manager.history()[0].status is not TaskStatus.RUNNING:
+        await asyncio.sleep(0)
+
+    invocation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await invocation
+
+    (task,) = manager.history()
+    assert task.status is TaskStatus.FAILED
+    assert task.finished_at is not None and task.started_at is not None
+    assert task.result is not None and task.result.error == "Tool execution was cancelled."
+    assert task.result.metadata["cancelled"] is True
+    assert "task.failed" in events

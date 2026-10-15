@@ -7,6 +7,8 @@ export interface ToolDefinition {
   capabilities: string[];
   permissions: string[];
   enabled: boolean;
+  /** Declared by the tool: whether running it may change something outside Genesis. */
+  side_effects: boolean;
   metadata: Record<string, unknown>;
 }
 

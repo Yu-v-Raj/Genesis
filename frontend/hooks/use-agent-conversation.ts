@@ -13,8 +13,11 @@ import type { Agent, AgentChatResponse, AgentSession, AgentSessionSummary, Sessi
  * session's history survives refreshes and restarts. With no explicit choice the Agent's
  * active (most recently used) session is shown. While a request is in flight the user's
  * message is shown optimistically; failed turns are never stored by the backend.
+ *
+ * `initialSessionId` (for example from the URL) is opened when the Agent is first shown;
+ * if it doesn't exist or belongs to another Agent, the Agent's active session is used.
  */
-export function useAgentConversation(agentId: string | null, onAgentUpdated?: (agent: Agent) => void) {
+export function useAgentConversation(agentId: string | null, onAgentUpdated?: (agent: Agent) => void, initialSessionId: string | null = null) {
   const [session, setSession] = useState<AgentSession | null>(null);
   const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
@@ -24,7 +27,12 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
   const [switching, setSwitching] = useState(false);
   const [executions, setExecutions] = useState<Execution[]>([]);
   const inFlight = useRef(false);
+  const initialSession = useRef(initialSessionId);
   const sessionId = session?.id ?? null;
+
+  useEffect(() => {
+    initialSession.current = initialSessionId;
+  }, [initialSessionId]);
 
   const refreshExecutions = useCallback(async () => {
     if (!agentId) return;
@@ -44,7 +52,7 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
     }
   }, [agentId]);
 
-  const open = useCallback(async (sessionId: string | null) => {
+  const open = useCallback(async (sessionId: string | null, fallbackToActive = false) => {
     if (!agentId) {
       setSession(null);
       setSessions([]);
@@ -53,7 +61,15 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
     setLoading(true);
     try {
       setLoadError(null);
-      setSession(sessionId ? await AgentService.getSessionById(agentId, sessionId) : await AgentService.getSession(agentId));
+      let loaded: AgentSession;
+      try {
+        loaded = sessionId ? await AgentService.getSessionById(agentId, sessionId) : await AgentService.getSession(agentId);
+      } catch (cause) {
+        const missing = cause instanceof AgentApiError && (cause.status === 404 || cause.status === 422);
+        if (!(fallbackToActive && sessionId && missing)) throw cause;
+        loaded = await AgentService.getSession(agentId);
+      }
+      setSession(loaded);
       void refreshSessions();
       void refreshExecutions();
     } catch (cause) {
@@ -67,7 +83,8 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
     queueMicrotask(() => {
       setProblem(null);
       setSession(null);
-      void open(null);
+      setExecutions([]);
+      void open(initialSession.current, true);
     });
   }, [open]);
 
@@ -138,7 +155,12 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
   return {
     sessionId,
     sessions,
+    /** The Agent the loaded session belongs to; callers ignore data for any other Agent. */
+    sessionAgentId: session?.agent_id ?? null,
     messages: session?.messages ?? ([] as SessionMessage[]),
+    /** This Agent's durable executions (newest first), for per-turn outcomes. */
+    executions,
+    refreshExecutions,
     pendingMessage,
     pending: pendingMessage !== null,
     loading,

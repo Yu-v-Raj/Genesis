@@ -5,26 +5,20 @@
  */
 import type { Execution, ExecutionStatus, ExecutionTransition, RetryInfo } from "@/types/executions";
 import type { WorkflowStatus, WorkflowTaskStatus } from "@/types/workflows";
+import { statusPresentation } from "./status.ts";
 
 type AnyStatus = ExecutionStatus | WorkflowStatus | WorkflowTaskStatus;
 
-const STATUS_TEXT: Record<AnyStatus, string> = {
-  pending: "Pending",
-  queued: "Queued",
-  starting: "Starting",
-  running: "Running",
-  completed: "Succeeded",
-  failed: "Failed",
-  cancelled: "Cancelled",
+/** Fuller wording for durable work, where the short badge label needs context. */
+const DESCRIPTIONS: Partial<Record<AnyStatus, string>> = {
   interrupted: "Interrupted — needs a decision",
   created: "Not started",
-  paused: "Paused",
-  ready: "Ready",
   blocked: "Blocked by a failed step",
 };
 
+/** Labels come from lib/status.ts, the single status vocabulary. */
 export function statusText(status: AnyStatus): string {
-  return STATUS_TEXT[status] ?? status;
+  return DESCRIPTIONS[status] ?? statusPresentation(status).label;
 }
 
 export function isActive(status: AnyStatus): boolean {

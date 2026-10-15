@@ -1,14 +1,39 @@
 @import "tailwindcss";
 
-@theme {
-  --color-background: #0b0f17;
-  --color-surface: #111827;
-  --color-border: #253044;
-  --color-primary: #4f8cff;
-  --color-success: #22c55e;
+/*
+ * Desktop-sidebar collapsed styles. Driven by the <html data-sidebar> attribute, which an
+ * inline script sets before first paint, so a saved preference never flashes. Scoped to
+ * #app-sidebar so the mobile drawer (outside it) always shows full labels.
+ */
+@custom-variant sidebar-collapsed (&:where([data-sidebar="collapsed"] #app-sidebar, [data-sidebar="collapsed"] #app-sidebar *));
 
-  --color-foreground: #e5e7eb;
-  --color-muted-foreground: #9ca3af;
+/*
+ * Genesis design tokens. Dark-first; every color is a token so pages never hard-code one.
+ *
+ * `primary` is the filled-control color (white text stays readable on it). `accent` is the
+ * bright cyan used for focus, the brand, and active navigation; `accent-2` (violet) marks
+ * AI activity such as running work. Status colors come in fg / bg / border triplets.
+ */
+@theme {
+  --color-background: #07090f;
+  --color-surface: #0c1018;
+  --color-surface-2: #111623;
+  --color-elevated: #161c2b;
+  --color-border: #222a3a;
+  --color-border-strong: #323c52;
+
+  --color-foreground: #e6e9f0;
+  --color-muted-foreground: #8b93a7;
+  --color-subtle: #5d667a;
+
+  --color-primary: #0b7c9c;
+  --color-accent: #22d3ee;
+  --color-accent-foreground: #04141a;
+  --color-accent-2: #a78bfa;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-info: #60a5fa;
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
@@ -16,6 +41,20 @@
   --radius-lg: 0.75rem;
   --radius-md: 0.5rem;
   --radius-sm: 0.375rem;
+
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.02);
+  --shadow-overlay: 0 24px 64px -16px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.04);
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
+
+  --animate-soft-pulse: soft-pulse 1.8s ease-in-out infinite;
+  --animate-overlay-in: overlay-in var(--duration-base) var(--ease-standard);
+  --animate-dialog-in: dialog-in var(--duration-base) var(--ease-standard);
+  --animate-drawer-in: drawer-in var(--duration-slow) var(--ease-standard);
+  --animate-sheet-in: sheet-in var(--duration-slow) var(--ease-standard);
 }
 
 @layer base {
@@ -27,14 +66,15 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    color-scheme: dark;
   }
 
   ::selection {
-    background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
+    background-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
   }
 
   *:focus-visible {
-    outline: 2px solid var(--color-primary);
+    outline: 2px solid var(--color-accent);
     outline-offset: 2px;
   }
 
@@ -66,24 +106,18 @@
 }
 
 @layer utilities {
-  .bg-background {
-    background-color: var(--color-background);
-  }
-  .bg-surface {
-    background-color: var(--color-surface);
-  }
-  .text-foreground {
-    color: var(--color-foreground);
-  }
-  .text-muted-foreground {
-    color: var(--color-muted-foreground);
-  }
-  .border-border {
-    border-color: var(--color-border);
-  }
-  .animate-soft-pulse {
-    animation: soft-pulse 1.8s ease-in-out infinite;
-  }
+  /* Status tones: one source for badge, alert and dot colors (see lib/status.ts). */
+  .tone-success { --tone: var(--color-success); }
+  .tone-warning { --tone: var(--color-warning); }
+  .tone-danger { --tone: var(--color-danger); }
+  .tone-info { --tone: var(--color-info); }
+  .tone-running { --tone: var(--color-accent-2); }
+  .tone-neutral { --tone: var(--color-muted-foreground); }
+  .tone-fg { color: var(--tone); }
+  .tone-bg { background-color: color-mix(in srgb, var(--tone) 10%, transparent); }
+  .tone-border { border-color: color-mix(in srgb, var(--tone) 28%, transparent); }
+  .tone-dot { background-color: var(--tone); }
+
   .skeleton-shimmer {
     position: relative;
     overflow: hidden;
@@ -92,8 +126,25 @@
     position: absolute;
     inset: 0;
     transform: translateX(-100%);
-    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.06), transparent);
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.05), transparent);
     content: "";
     animation: shimmer 1.8s infinite;
   }
+}
+
+/* Overlay entrances. Exits are instant; the reduced-motion rule above removes both. */
+@keyframes overlay-in {
+  from { opacity: 0; }
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+}
+
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateX(-12px); }
+}
+
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateX(16px); }
 }

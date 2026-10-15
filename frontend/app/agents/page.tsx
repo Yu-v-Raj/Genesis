@@ -1,169 +1,205 @@
 "use client";
 
-import { useState } from "react";
-import { Bot, CheckCircle2, ChevronDown, CircleStop, Clock3, Gauge, PlayCircle, Plus, TimerReset, XCircle } from "lucide-react";
+import { Suspense, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Bot } from "lucide-react";
 
-import { AgentCard } from "@/components/agents/agent-card";
-import { AgentConversation, ReadinessBadge } from "@/components/agents/agent-conversation";
-import { AgentListSkeleton } from "@/components/agents/agent-list-skeleton";
+import { AgentDetails } from "@/components/agents/agent-details";
+import { AgentDirectory } from "@/components/agents/agent-directory";
 import { AgentSettingsDialog } from "@/components/agents/agent-settings-dialog";
-import { ErrorState } from "@/components/dashboard/error-state";
+import { AgentWorkspace } from "@/components/agents/agent-workspace";
 import { RealtimeNotifications } from "@/components/dashboard/realtime-notifications";
-import { RealtimeStatus } from "@/components/dashboard/realtime-status";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Topbar } from "@/components/layout/topbar";
+import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
+import { Alert, Skeleton } from "@/components/ui/feedback";
 import { useAgentConversation } from "@/hooks/use-agent-conversation";
 import { useAgentOptions } from "@/hooks/use-agent-options";
 import { useAgents } from "@/hooks/use-agents";
 import { useExecutions } from "@/hooks/use-executions";
 import { useRealtime } from "@/hooks/use-realtime";
-import { agentReadiness, modelLabel } from "@/lib/agent-experience";
+import { activeChatExecution, sortAgents, type LifecycleAction } from "@/lib/agent-directory";
+import { agentReadiness } from "@/lib/agent-experience";
+import { cn } from "@/lib/utils";
 import type { Agent } from "@/types/agents";
 
 /** `undefined` = closed, `null` = creating, an Agent = editing that Agent. */
 type SettingsTarget = Agent | null | undefined;
 
+const PAGE_HEIGHT = "h-[calc(100dvh-3.5rem)]"; // the shell's top bar is h-14
+
 export default function AgentsPage() {
+  // The selected Agent and conversation live in the URL (?agent=…&session=…), so a reload
+  // or a shared link reopens the same place. useSearchParams needs a Suspense boundary.
+  return (
+    <Suspense fallback={<AgentsSkeleton />}>
+      <Agents />
+    </Suspense>
+  );
+}
+
+function AgentsSkeleton() {
+  return (
+    <div className={cn("flex", PAGE_HEIGHT)} aria-busy="true">
+      <div className="w-full space-y-3 border-r border-border p-4 lg:w-80 xl:w-96"><Skeleton className="h-6 w-32" /><Skeleton className="h-9 w-full" /><Skeleton className="h-14 w-full" /><Skeleton className="h-14 w-full" /></div>
+      <div className="hidden flex-1 lg:block" />
+    </div>
+  );
+}
+
+/**
+ * Opens the create dialog when another page links to `/agents?create=1` (the Overview's
+ * Create Agent action), then drops the parameter so a reload doesn't reopen it.
+ */
+function CreateFromLink({ onCreate }: { onCreate: () => void }) {
+  const requested = useSearchParams().get("create") === "1";
+  const router = useRouter();
+  const pathname = usePathname();
+  useEffect(() => {
+    if (!requested) return;
+    onCreate();
+    const params = new URLSearchParams(window.location.search);
+    params.delete("create");
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [requested, onCreate, router, pathname]);
+  return null;
+}
+
+function Agents() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [settingsTarget, setSettingsTarget] = useState<SettingsTarget>(undefined);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [confirm, setConfirm] = useState<{ agent: Agent; action: "stop" | "delete" } | null>(null);
+
   const realtime = useRealtime();
   const options = useAgentOptions();
   const {
-    agents, events, contexts, loading, error, pendingAgentIds, connectionStatus,
+    agents: unsortedAgents, events, contexts, loading, error, pendingAgentIds, connectionStatus,
     createAgent, updateConfiguration, upsertAgent, runLifecycleAction, loadContext, retry,
   } = useAgents(realtime);
-  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null;
-  const conversation = useAgentConversation(selectedAgent?.id ?? null, upsertAgent);
   const executionState = useExecutions(realtime);
-  const combinedError = error ?? executionState.error;
-  const initialLoading = loading || executionState.loading;
-  const readinessFor = (agent: Agent) => agentReadiness(agent, options.models);
+
+  const agents = sortAgents(unsortedAgents);
+  const requestedAgentId = params.get("agent");
+  const requestedSessionId = params.get("session");
+  const selected = agents.find((agent) => agent.id === requestedAgentId) ?? null;
+  // Wide screens always show a workspace (the newest Agent by default); narrow screens
+  // show the list until an Agent is chosen.
+  const shown = selected ?? agents[0] ?? null;
+  const conversation = useAgentConversation(shown?.id ?? null, upsertAgent, selected ? requestedSessionId : null);
+
+  // Keep the open conversation in the URL once the user has chosen an Agent.
+  useEffect(() => {
+    if (!selected || !conversation.sessionId || conversation.sessionAgentId !== selected.id) return;
+    if (conversation.sessionId === requestedSessionId) return;
+    router.replace(`${pathname}?agent=${selected.id}&session=${conversation.sessionId}`, { scroll: false });
+  }, [selected, conversation.sessionId, conversation.sessionAgentId, requestedSessionId, router, pathname]);
+
+  // An Agent link that no longer resolves (deleted, or never existed) returns to the list.
+  useEffect(() => {
+    if (!loading && requestedAgentId && unsortedAgents.length > 0 && !unsortedAgents.some((agent) => agent.id === requestedAgentId)) {
+      router.replace(pathname, { scroll: false });
+    }
+  }, [loading, requestedAgentId, unsortedAgents, router, pathname]);
+
+  function selectAgent(agentId: string) {
+    setDetailsOpen(false);
+    router.push(`${pathname}?agent=${agentId}`, { scroll: false });
+  }
 
   async function create(input: Parameters<typeof createAgent>[0]) {
     const agent = await createAgent(input);
-    if (agent) setSelectedAgentId(agent.id);
+    if (agent) selectAgent(agent.id);
     return agent;
   }
 
-  return (
-    <div className="flex h-screen w-full overflow-hidden">
-      <Sidebar />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <Topbar />
-        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8">
-          <div className="mx-auto flex max-w-6xl flex-col gap-6">
-            <RealtimeNotifications events={realtime.latestEvent ? [realtime.latestEvent] : []} />
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Bot className="h-5 w-5 text-primary" aria-hidden="true" />
-                  <h1 className="text-2xl font-semibold tracking-tight text-foreground">Agents</h1>
-                </div>
-                <p className="mt-1 text-sm text-muted-foreground">Create an Agent, choose the model and tools it may use, then chat with it.</p>
-                <div className="mt-2">
-                  <RealtimeStatus connectionStatus={connectionStatus} runtimeState="agent runtime" lastHeartbeat={null} />
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSettingsTarget(null)}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white shadow-sm shadow-primary/20 transition-all hover:-translate-y-0.5 hover:bg-primary/85 active:translate-y-0"
-              >
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                Create Agent
-              </button>
-            </div>
+  function lifecycle(agent: Agent, action: LifecycleAction) {
+    if (action === "initialize") void runLifecycleAction(agent.id, action);
+    else setConfirm({ agent, action });
+  }
 
-            {combinedError && !initialLoading && agents.length === 0 ? (
-              <ErrorState message={combinedError} onRetry={() => void Promise.all([retry(), executionState.retry(), options.reload()])} />
-            ) : (
-              <>
-                {combinedError && (
-                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-300">
-                    <span>{combinedError}</span>
-                    <button type="button" onClick={() => void Promise.all([retry(), executionState.retry()])} className="rounded-md border border-red-400/25 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-400/10">Retry</button>
-                  </div>
-                )}
-                {initialLoading ? (
-                  <AgentListSkeleton />
-                ) : agents.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-14 text-center shadow-sm">
-                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-primary/20 bg-primary/10">
-                      <Bot className="h-6 w-6 text-primary" aria-hidden="true" />
-                    </div>
-                    <h2 className="mt-4 text-lg font-semibold text-foreground">No Agents yet</h2>
-                    <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-                      Create your first Agent, pick a model and the tools it may use, and ask it to do something — for example, “Calculate 25 × 4”.
-                    </p>
-                    <button type="button" onClick={() => setSettingsTarget(null)} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/85">
-                      <Plus className="h-4 w-4" aria-hidden="true" /> Create Agent
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <section className="grid gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
-                      <nav aria-label="Your Agents" className="rounded-xl border border-border bg-surface p-2 shadow-sm lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto">
-                        <ul className="grid gap-1">
-                          {agents.map((agent) => {
-                            const selected = agent.id === selectedAgent?.id;
-                            return (
-                              <li key={agent.id}>
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedAgentId(agent.id)}
-                                  aria-current={selected ? "true" : undefined}
-                                  className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors ${selected ? "bg-primary/10 ring-1 ring-primary/40" : "hover:bg-white/[0.04]"}`}
-                                >
-                                  <span className="block truncate text-sm font-medium text-foreground">{agent.name}</span>
-                                  <span className="mt-1 block truncate text-xs text-muted-foreground">
-                                    {agent.llm_model ? modelLabel(agent.llm_model) : "No model selected"}
-                                  </span>
-                                  <span className="mt-1.5 block"><ReadinessBadge readiness={readinessFor(agent)} /></span>
-                                </button>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </nav>
-                      <AgentConversation
-                        key={selectedAgent?.id}
-                        agent={selectedAgent}
-                        readiness={selectedAgent ? readinessFor(selectedAgent) : null}
-                        messages={conversation.messages}
-                        sessionId={conversation.sessionId}
-                        sessions={conversation.sessions}
-                        loading={conversation.loading}
-                        switching={conversation.switching}
-                        pendingMessage={conversation.pendingMessage}
-                        problem={conversation.problem}
-                        loadError={conversation.loadError}
-                        onSend={conversation.send}
-                        onNewConversation={() => void conversation.startNewConversation()}
-                        onOpenSession={(id) => void conversation.openSession(id)}
-                        onRetryLoad={() => void conversation.reload()}
-                        unfinished={conversation.unfinished}
-                        onRetryUnfinished={conversation.retryUnfinished}
-                        onConfigure={() => selectedAgent && setSettingsTarget(selectedAgent)}
-                        onInitialize={() => selectedAgent && void runLifecycleAction(selectedAgent.id, "initialize")}
-                        onDismissProblem={conversation.dismissProblem}
-                      />
-                    </section>
-                    <RuntimeDetails
-                      agents={agents}
-                      executionState={executionState}
-                      events={events}
-                      contexts={contexts}
-                      pendingAgentIds={pendingAgentIds}
-                      onAction={runLifecycleAction}
-                      onLoadContext={loadContext}
-                    />
-                  </>
-                )}
-              </>
-            )}
+  async function confirmLifecycle() {
+    if (!confirm) return;
+    const { agent, action } = confirm;
+    const done = await runLifecycleAction(agent.id, action);
+    setConfirm(null);
+    if (done && action === "delete" && agent.id === requestedAgentId) router.push(pathname, { scroll: false });
+  }
+
+  const readiness = shown ? agentReadiness(shown, options.models) : null;
+  // Any chat run in progress for this conversation: one sent from here, a retry, or another tab.
+  const liveExecution = shown ? activeChatExecution(executionState.executions, shown.id, conversation.sessionId) : null;
+  const pageError = error ?? executionState.error;
+
+  return (
+    <div className={cn("flex min-h-0", PAGE_HEIGHT)}>
+      <Suspense fallback={null}><CreateFromLink onCreate={() => setSettingsTarget(null)} /></Suspense>
+      <RealtimeNotifications events={realtime.latestEvent ? [realtime.latestEvent] : []} />
+
+      <aside aria-label="Agents directory" className={cn("min-h-0 w-full shrink-0 flex-col border-r border-border lg:flex lg:w-80 xl:w-96", selected ? "hidden" : "flex")}>
+        {(pageError || connectionStatus === "disconnected") && (
+          <div className="flex flex-col gap-2 border-b border-border p-3">
+            {pageError && <Alert tone="danger" action={<Button size="sm" onClick={() => void Promise.all([retry(), executionState.retry(), options.reload()])}>Retry</Button>}><span className="text-xs">{pageError}</span></Alert>}
+            {connectionStatus === "disconnected" && <Alert tone="warning"><span className="text-xs">Live updates are reconnecting; statuses may be out of date.</span></Alert>}
           </div>
-        </main>
+        )}
+        <AgentDirectory
+          agents={agents}
+          loading={loading && unsortedAgents.length === 0}
+          selectedId={shown?.id ?? null}
+          models={options.models}
+          pendingIds={pendingAgentIds}
+          onSelect={selectAgent}
+          onCreate={() => setSettingsTarget(null)}
+          onConfigure={(agent) => setSettingsTarget(agent)}
+          onAction={lifecycle}
+        />
+      </aside>
+
+      <div className={cn("min-h-0 min-w-0 flex-1 lg:flex", selected ? "flex" : "hidden")}>
+        {shown ? (
+          <AgentWorkspace
+            key={shown.id}
+            agent={shown}
+            readiness={readiness}
+            conversation={conversation}
+            liveExecution={liveExecution}
+            cancelling={liveExecution !== null && executionState.pendingExecutionIds.has(liveExecution.execution_id)}
+            onCancelRun={(executionId) => void executionState.cancelExecution(executionId)}
+            onConfigure={() => setSettingsTarget(shown)}
+            onInitialize={() => void runLifecycleAction(shown.id, "initialize")}
+            onOpenDetails={() => { setDetailsOpen(true); void executionState.loadAgentExecutions(shown.id); }}
+            onAction={(action) => lifecycle(shown, action)}
+            lifecyclePending={pendingAgentIds.has(shown.id)}
+            onBack={() => router.push(pathname, { scroll: false })}
+          />
+        ) : (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
+            <Bot aria-hidden className="h-6 w-6 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">{loading ? "Loading Agents…" : "Create an Agent to start a conversation."}</p>
+          </div>
+        )}
       </div>
+
+      {shown && (
+        <AgentDetails
+          agent={shown}
+          open={detailsOpen}
+          onClose={() => setDetailsOpen(false)}
+          executions={executionState.executions.filter((execution) => execution.agent_id === shown.id)}
+          events={events}
+          context={contexts[shown.id]}
+          onLoadContext={() => void loadContext(shown.id)}
+          onTestRun={() => void executionState.executeAgent(shown.id)}
+          testRunPending={executionState.pendingAgentIds.has(shown.id)}
+          onCancelRun={(executionId) => void executionState.cancelExecution(executionId)}
+          cancellingIds={executionState.pendingExecutionIds}
+          error={executionState.error}
+        />
+      )}
+
       {settingsTarget !== undefined && (
         <AgentSettingsDialog
           key={settingsTarget?.id ?? "new"}
@@ -176,68 +212,25 @@ export default function AgentsPage() {
           onUpdate={updateConfiguration}
         />
       )}
-    </div>
-  );
-}
 
-/** Lifecycle records, contexts, and executions for engineers; collapsed by default. */
-function RuntimeDetails({
-  agents, executionState, events, contexts, pendingAgentIds, onAction, onLoadContext,
-}: {
-  agents: Agent[];
-  executionState: ReturnType<typeof useExecutions>;
-  events: ReturnType<typeof useAgents>["events"];
-  contexts: ReturnType<typeof useAgents>["contexts"];
-  pendingAgentIds: ReadonlySet<string>;
-  onAction: ReturnType<typeof useAgents>["runLifecycleAction"];
-  onLoadContext: (agentId: string) => Promise<void>;
-}) {
-  const executions = executionState.executions;
-  const completed = executions.filter((execution) => execution.status === "completed");
-  const terminal = executions.filter((execution) => ["completed", "failed", "cancelled"].includes(execution.status));
-  const durations = completed.map((execution) => execution.duration).filter((duration): duration is number => duration !== null);
-  const summaries = [
-    { label: "Agents", value: agents.length, icon: Bot },
-    { label: "Ready", value: agents.filter((agent) => agent.status === "idle").length, icon: CheckCircle2 },
-    { label: "Working", value: agents.filter((agent) => agent.status === "running").length, icon: PlayCircle },
-    { label: "Stopped", value: agents.filter((agent) => agent.status === "stopped").length, icon: CircleStop },
-    { label: "Executions", value: executions.length, icon: Gauge },
-    { label: "Failed executions", value: executions.filter((execution) => execution.status === "failed").length, icon: XCircle },
-    { label: "Avg. execution", value: durations.length ? `${(durations.reduce((sum, value) => sum + value, 0) / durations.length).toFixed(1)}s` : "—", icon: TimerReset },
-    { label: "Execution success", value: terminal.length ? `${Math.round((completed.length / terminal.length) * 100)}%` : "—", icon: Clock3 },
-  ];
-  return (
-    <details className="group rounded-xl border border-border bg-surface shadow-sm">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-foreground">
-        <span>Runtime details <span className="font-normal text-muted-foreground">— lifecycle, context, and executions</span></span>
-        <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
-      </summary>
-      <div className="grid gap-4 border-t border-border p-4">
-        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {summaries.map(({ label, value, icon: Icon }) => (
-            <div key={label} className="rounded-lg border border-border bg-background/40 px-3 py-2">
-              <dt className="flex items-center justify-between text-xs text-muted-foreground">{label}<Icon className="h-3.5 w-3.5" aria-hidden="true" /></dt>
-              <dd className="mt-1 text-lg font-semibold text-foreground">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        {agents.map((agent) => (
-          <AgentCard
-            key={agent.id}
-            agent={agent}
-            context={contexts[agent.id]}
-            events={events}
-            pending={pendingAgentIds.has(agent.id)}
-            executions={executions.filter((execution) => execution.agent_id === agent.id)}
-            pendingExecution={executionState.pendingAgentIds.has(agent.id) || executions.some((execution) => execution.agent_id === agent.id && executionState.pendingExecutionIds.has(execution.execution_id))}
-            onAction={onAction}
-            onLoadContext={onLoadContext}
-            onExecute={executionState.executeAgent}
-            onCancelExecution={executionState.cancelExecution}
-            onLoadExecutions={executionState.loadAgentExecutions}
-          />
-        ))}
-      </div>
-    </details>
+      <Dialog
+        open={confirm !== null}
+        onClose={() => { if (!confirm || !pendingAgentIds.has(confirm.agent.id)) setConfirm(null); }}
+        title={confirm?.action === "delete" ? `Delete ${confirm.agent.name}?` : `Stop ${confirm?.agent.name ?? "this Agent"}?`}
+        description={confirm?.action === "delete"
+          ? "This permanently deletes the Agent together with its conversations, memories and run history. It can't be undone."
+          : "A stopped Agent can no longer chat or run work. Stopping can't be undone; afterwards the Agent can only be deleted."}
+        footer={confirm && (
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button onClick={() => setConfirm(null)} disabled={pendingAgentIds.has(confirm.agent.id)} data-autofocus>Cancel</Button>
+            <Button variant="danger" onClick={() => void confirmLifecycle()} loading={pendingAgentIds.has(confirm.agent.id)}>
+              {confirm.action === "delete" ? "Delete Agent" : "Stop Agent"}
+            </Button>
+          </div>
+        )}
+      >
+        {null}
+      </Dialog>
+    </div>
   );
 }

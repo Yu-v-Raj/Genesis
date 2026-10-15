@@ -1,5 +1,6 @@
 """High-level task orchestration for Tool Runtime."""
 
+import asyncio
 from collections import deque
 from collections.abc import Mapping
 from threading import RLock
@@ -49,23 +50,49 @@ class ToolRuntimeManager:
             metadata={} if metadata is None else metadata,
         )
         self._save(task)
-        await self._publish(TaskCreated, task)
-        running = task.with_updates(status=TaskStatus.RUNNING, started_at=utc_now())
-        self._save(running)
-        result = await self._executor.execute(
-            ToolRequest(
-                tool_name=tool_name,
-                execution_id=execution_id,
-                task_id=task.task_id,
-                arguments={} if arguments is None else arguments,
-                metadata={} if metadata is None else metadata,
+        running = task
+        try:
+            await self._publish(TaskCreated, task)
+            running = task.with_updates(status=TaskStatus.RUNNING, started_at=utc_now())
+            self._save(running)
+            result = await self._executor.execute(
+                ToolRequest(
+                    tool_name=tool_name,
+                    execution_id=execution_id,
+                    task_id=task.task_id,
+                    arguments={} if arguments is None else arguments,
+                    metadata={} if metadata is None else metadata,
+                )
             )
-        )
+        except asyncio.CancelledError:
+            # The caller (e.g. a cancelled workflow worker) abandoned the invocation; record
+            # a terminal snapshot so history never shows a task stuck in "running".
+            await self._record_cancelled(running)
+            raise
         status = TaskStatus.COMPLETED if result.status is ToolResultStatus.COMPLETED else TaskStatus.FAILED
         completed = running.with_updates(status=status, finished_at=utc_now(), result=result)
         self._save(completed)
         await self._publish(TaskCompleted if status is TaskStatus.COMPLETED else TaskFailed, completed)
         return completed
+
+    async def _record_cancelled(self, task: Task) -> None:
+        finished_at = utc_now()
+        duration = 0.0 if task.started_at is None else max((finished_at - task.started_at).total_seconds(), 0.0)
+        cancelled = task.with_updates(
+            status=TaskStatus.FAILED,
+            finished_at=finished_at,
+            result=ToolResult(
+                status=ToolResultStatus.FAILED,
+                error="Tool execution was cancelled.",
+                metadata={"cancelled": True},
+                duration=duration,
+            ),
+        )
+        self._save(cancelled)
+        try:
+            await self._publish(TaskFailed, cancelled)
+        except asyncio.CancelledError:
+            pass  # the snapshot is saved; a repeated cancel must not mask the original one
 
     def list_tools(self) -> tuple[Tool, ...]:
         """Return registered Tools."""

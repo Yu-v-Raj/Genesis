@@ -1,27 +1,189 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Activity, Calculator, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Dices, Fingerprint, LoaderCircle, MessageSquare, Play, Search, Timer, Wrench, X, XCircle } from "lucide-react";
-import { motion } from "framer-motion";
+import { Suspense, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Calculator, Dices, Fingerprint, MessageSquare, Search, ShieldAlert, Timer, Wrench, X, type LucideIcon } from "lucide-react";
+
 import { RealtimeNotifications } from "@/components/dashboard/realtime-notifications";
-import { RealtimeStatus } from "@/components/dashboard/realtime-status";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Topbar } from "@/components/layout/topbar";
+import { ToolDetail } from "@/components/tools/tool-detail";
+import { ToolRunRow } from "@/components/tools/tool-run";
+import { Button } from "@/components/ui/button";
+import { Alert, EmptyState, Skeleton } from "@/components/ui/feedback";
+import { Input, Select } from "@/components/ui/field";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { Tabs, tabPanelProps, type TabItem } from "@/components/ui/tabs";
+import { useAgents } from "@/hooks/use-agents";
+import { useNow } from "@/hooks/use-now";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useTools } from "@/hooks/use-tools";
+import { agentsAllowing, availableFilters, filterTools, toolLabel, type AvailabilityFilter, type EffectsFilter } from "@/lib/tools";
 import { cn } from "@/lib/utils";
-import type { ToolDefinition, ToolTask } from "@/types/tools";
+import type { ToolDefinition } from "@/types/tools";
 
-type Field = { name: string; label: string; helper: string; type: "text" | "number"; placeholder?: string };
-const fields: Record<string, Field[]> = { echo: [{ name: "message", label: "Text", helper: "The exact message returned by the tool.", type: "text", placeholder: "Hello Genesis" }], calculator: [{ name: "expression", label: "Expression", helper: "Safe arithmetic, for example 2 + 5 * 10.", type: "text", placeholder: "2 + 5 * 10" }], random_number: [{ name: "min", label: "Minimum", helper: "Inclusive lower bound.", type: "number", placeholder: "1" }, { name: "max", label: "Maximum", helper: "Inclusive upper bound.", type: "number", placeholder: "100" }], delay: [{ name: "seconds", label: "Seconds", helper: "A value from 0 to 60 seconds.", type: "number", placeholder: "2" }], uuid: [] };
-const icons: Record<string, typeof Wrench> = { calculator: Calculator, echo: MessageSquare, uuid: Fingerprint, random_number: Dices, delay: Timer };
-const duration = (value: number | undefined | null) => value == null ? "—" : `${value.toFixed(3)}s`;
-const timestamp = (value: string | null) => value ? new Date(value).toLocaleString() : "—";
-const preview = (value: unknown) => { const text = typeof value === "string" ? value : JSON.stringify(value); return text.length > 70 ? `${text.slice(0, 70)}…` : text; };
-function Status({ status, enabled }: { status?: string; enabled?: boolean }) { const value = status ?? (enabled ? "ready" : "disabled"); const good = value === "completed" || value === "ready"; const bad = value === "failed"; const Icon = good ? CheckCircle2 : bad ? CircleAlert : value === "disabled" ? XCircle : LoaderCircle; return <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize", good ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200" : bad ? "border-red-400/25 bg-red-400/10 text-red-200" : "border-amber-400/25 bg-amber-400/10 text-amber-200")}><Icon className={cn("h-3 w-3", value === "running" && "animate-spin")} />{value}</span>; }
-function Json({ value }: { value: unknown }) { return <pre className="max-h-64 overflow-auto rounded-lg border border-white/[0.07] bg-background/80 p-3 font-mono text-xs leading-5 text-slate-200">{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre>; }
-function Result({ task }: { task?: ToolTask }) { const [copied, setCopied] = useState(false); if (!task) return <section className="rounded-xl border border-dashed border-border bg-surface p-6 text-center"><Activity className="mx-auto h-6 w-6 text-primary" /><p className="mt-3 text-sm font-medium text-foreground">No result selected</p><p className="mt-1 text-xs text-muted-foreground">Run a tool or select an execution.</p></section>; const result = task.result; async function copy() { if (!result) return; await navigator.clipboard.writeText(typeof result.output === "string" ? result.output : JSON.stringify(result.output, null, 2)); setCopied(true); window.setTimeout(() => setCopied(false), 1800); } return <section className="rounded-xl border border-border bg-surface p-4 shadow-sm"><div className="flex justify-between gap-3"><div><p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Execution result</p><h2 className="mt-1 font-semibold text-foreground">{task.tool_name}</h2><p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{task.task_id}</p></div><Status status={result?.status ?? task.status} /></div>{result ? <div className="mt-5 space-y-4"><div><div className="mb-2 flex justify-between"><p className="text-xs font-medium text-muted-foreground">Output</p><button type="button" onClick={() => void copy()} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-white/5"><Copy className="h-3 w-3" />{copied ? "Copied" : "Copy"}</button></div><Json value={result.output} /></div>{result.error && <p role="alert" className="rounded-lg border border-red-400/25 bg-red-400/5 p-3 text-sm text-red-200">{result.error}</p>}<p className="rounded-lg border border-white/[0.06] bg-white/[0.025] p-3 font-mono text-xs text-foreground">Duration: {duration(result.duration)}</p></div> : <p className="mt-5 flex items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-sm text-amber-100"><LoaderCircle className="h-4 w-4 animate-spin" />Awaiting result.</p>}</section>; }
+const ICONS: Record<string, LucideIcon> = { calculator: Calculator, echo: MessageSquare, uuid: Fingerprint, random_number: Dices, delay: Timer };
+type Tab = "tools" | "runs";
+const TAB_PREFIX = "tools";
 
-function ToolCard({ tool, tasks, open, pending, onToggle, onExecute, onSelect }: { tool: ToolDefinition; tasks: ToolTask[]; open: boolean; pending: boolean; onToggle: () => void; onExecute: (args: Record<string, unknown>) => void; onSelect: (task: ToolTask) => void }) { const [values, setValues] = useState<Record<string, string>>({}); const latest = tasks[0]; const Icon = icons[tool.name] ?? Wrench; const toolFields = fields[tool.name] ?? []; const argumentsFromValues = () => Object.fromEntries(toolFields.map(field => [field.name, field.type === "number" ? Number(values[field.name]) : values[field.name]])); const ready = toolFields.every(field => values[field.name]?.trim()); function submit(event: React.FormEvent) { event.preventDefault(); onExecute(argumentsFromValues()); } function primaryAction() { if (toolFields.length > 0 && !ready) { if (!open) onToggle(); return; } onExecute(argumentsFromValues()); } return <motion.article layout className="rounded-xl border border-border bg-surface p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-white/15 hover:shadow-lg hover:shadow-black/15 sm:p-6"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2.5"><span className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/15 bg-primary/10 text-primary"><Icon className="h-4.5 w-4.5" /></span><h2 className="text-base font-semibold tracking-tight text-foreground">{tool.name}</h2><Status enabled={tool.enabled} /></div><p className="mt-3 text-sm leading-6 text-muted-foreground">{tool.description}</p><div className="mt-4 flex flex-wrap gap-1.5">{tool.capabilities.map(item => <span key={item} className="rounded-md border border-white/[0.06] bg-white/[0.04] px-2 py-1 text-xs text-muted-foreground">{item}</span>)}</div><dl className="mt-5 grid grid-cols-2 gap-3 border-t border-border pt-4 text-xs sm:grid-cols-4"><div><dt className="text-muted-foreground">Version</dt><dd className="mt-1 text-foreground">{tool.version}</dd></div><div><dt className="text-muted-foreground">Executions</dt><dd className="mt-1 text-foreground">{tasks.length}</dd></div><div><dt className="text-muted-foreground">Latest</dt><dd title={timestamp(latest?.finished_at ?? latest?.started_at ?? null)} className="mt-1 text-foreground">{latest ? "Recorded" : "—"}</dd></div><div><dt className="text-muted-foreground">Status</dt><dd className="mt-1 capitalize text-foreground">{latest?.status ?? (tool.enabled ? "Ready" : "Disabled")}</dd></div></dl><div className="mt-4 flex flex-wrap items-center gap-2"><button type="button" disabled={!tool.enabled || pending} onClick={primaryAction} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary/85 disabled:cursor-not-allowed disabled:opacity-45">{pending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}{pending ? "Running…" : toolFields.length > 0 && !ready ? "Enter details" : "Execute"}</button><button type="button" onClick={onToggle} aria-expanded={open} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-muted-foreground hover:bg-white/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">Details <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} /></button></div></div>{open && <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="mt-5 overflow-hidden border-t border-border pt-5"><div className="grid gap-5 lg:grid-cols-2"><section><h3 className="text-sm font-semibold text-foreground">Overview</h3><p className="mt-3 text-xs text-muted-foreground">Permissions: <span className="text-foreground">{tool.permissions.join(", ") || "—"}</span></p>{Object.keys(tool.metadata).length > 0 && <div className="mt-3"><Json value={tool.metadata} /></div>}</section><section><h3 className="text-sm font-semibold text-foreground">Recent executions</h3>{tasks.length ? <div className="mt-3 space-y-2">{tasks.slice(0, 3).map(task => <button key={task.task_id} type="button" onClick={() => onSelect(task)} className="flex w-full items-center justify-between gap-2 rounded-lg border border-border p-2.5 text-left text-xs hover:bg-white/[0.04]"><span className="min-w-0 truncate font-mono text-muted-foreground">{preview(task.result?.output)}</span><Status status={task.status} /></button>)}</div> : <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">No executions for this tool yet.</p>}</section></div><form onSubmit={submit} className="mt-5 rounded-xl border border-primary/15 bg-primary/[0.03] p-4"><div className="flex justify-between gap-2"><h3 className="text-sm font-semibold text-foreground">Execute {tool.name}</h3>{toolFields.length === 0 && <p className="text-xs text-muted-foreground">No arguments required.</p>}</div><div className="mt-4 grid gap-4 sm:grid-cols-2">{toolFields.map(field => <label key={field.name} className="block text-xs font-medium text-foreground">{field.label}<input required type={field.type} min={field.name === "seconds" ? 0 : undefined} max={field.name === "seconds" ? 60 : undefined} value={values[field.name] ?? ""} onChange={event => setValues(v => ({ ...v, [field.name]: event.target.value }))} placeholder={field.placeholder} disabled={!tool.enabled || pending} className="mt-1.5 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50" /><span className="mt-1.5 block font-normal text-muted-foreground">{field.helper}</span></label>)}</div><button disabled={!tool.enabled || pending} className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary/85 disabled:cursor-not-allowed disabled:opacity-45">{pending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}{pending ? "Running…" : "Run tool"}</button></form></motion.div>}</motion.article>; }
+export default function ToolsPage() {
+  // The open tool and tab live in the URL (?tool=…&tab=runs); useSearchParams needs Suspense.
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6 sm:py-8" aria-busy="true"><Skeleton className="h-8 w-32" /><Skeleton className="h-80 w-full" /></div>}>
+      <Tools />
+    </Suspense>
+  );
+}
 
-export default function ToolsPage() { const realtime = useRealtime(); const { tools, tasks, capabilities, loading, error, pendingToolNames, execute, retry } = useTools(realtime); const [query, setQuery] = useState(""); const [expanded, setExpanded] = useState<string | null>(null); const [selected, setSelected] = useState<ToolTask | null>(null); const filtered = useMemo(() => tools.filter(tool => `${tool.name} ${tool.description}`.toLowerCase().includes(query.toLowerCase())), [query, tools]); const completed = tasks.filter(task => task.status === "completed"); const failed = tasks.filter(task => task.status === "failed"); const average = completed.length ? completed.reduce((sum, task) => sum + (task.result?.duration ?? 0), 0) / completed.length : null; const metrics = [{ label: "Registered tools", value: tools.length, Icon: Wrench }, { label: "Total executions", value: tasks.length, Icon: Activity }, { label: "Successful", value: completed.length, Icon: CheckCircle2 }, { label: "Failed", value: failed.length, Icon: XCircle }, { label: "Average duration", value: duration(average), Icon: Clock3 }]; return <div className="flex h-screen w-full overflow-hidden"><Sidebar /><div className="flex flex-1 flex-col overflow-hidden"><Topbar /><main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8"><div className="mx-auto flex max-w-6xl flex-col gap-6"><RealtimeNotifications events={realtime.latestEvent ? [realtime.latestEvent] : []} /><header><div className="flex items-center gap-2"><Wrench className="h-5 w-5 text-primary" /><h1 className="text-2xl font-semibold tracking-tight text-foreground">Tools</h1></div><p className="mt-1 text-sm text-muted-foreground">Capabilities available to Genesis executions.</p><div className="mt-2"><RealtimeStatus connectionStatus={realtime.connectionStatus} runtimeState="tool runtime" lastHeartbeat={null} /></div></header>{!loading && <section aria-label="Tool statistics" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">{metrics.map(({ label, value, Icon }) => <div key={label} className="rounded-xl border border-border bg-surface px-4 py-3 shadow-sm"><div className="flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">{label}</span><Icon className="h-4 w-4 text-primary" /></div><p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">{value}</p></div>)}</section>}{error && !loading && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-200"><span>{error}</span><button type="button" onClick={() => void retry()} className="rounded-md border border-red-400/25 px-3 py-1.5 text-xs font-medium hover:bg-red-400/10">Retry</button></div>}<section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]"><div><div className="relative mb-4"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search by tool name or description" aria-label="Search tools" className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-10 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus:border-primary focus-visible:ring-2 focus-visible:ring-primary" />{query && <button type="button" onClick={() => setQuery("")} className="absolute right-2 top-1/2 rounded p-1.5 text-muted-foreground hover:bg-white/5" aria-label="Clear search"><X className="h-4 w-4" /></button>}</div>{loading ? <div className="grid gap-4">{[1, 2, 3].map(i => <div key={i} className="h-[270px] animate-pulse rounded-xl border border-border bg-surface" />)}</div> : tools.length === 0 ? <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-14 text-center"><Wrench className="mx-auto h-7 w-7 text-primary" /><h2 className="mt-3 font-semibold text-foreground">No tools registered</h2></div> : filtered.length === 0 ? <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-14 text-center"><Search className="mx-auto h-7 w-7 text-primary" /><h2 className="mt-3 font-semibold text-foreground">No tools found</h2><p className="mt-1 text-sm text-muted-foreground">Try another search.</p></div> : <div className="grid gap-4">{filtered.map(tool => <ToolCard key={tool.name} tool={tool} tasks={tasks.filter(task => task.tool_name === tool.name)} open={expanded === tool.name} pending={pendingToolNames.has(tool.name)} onToggle={() => setExpanded(value => value === tool.name ? null : tool.name)} onExecute={args => void execute(tool.name, args).then(task => task && setSelected(task))} onSelect={setSelected} />)}</div>}</div><aside className="space-y-4"><Result task={selected ?? tasks[0]} /><section className="rounded-xl border border-border bg-surface p-4 shadow-sm"><h2 className="font-semibold text-foreground">Execution history</h2><p className="mt-1 text-xs text-muted-foreground">Newest first</p><div className="mt-4 space-y-2">{tasks.length === 0 ? <p className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">No execution history yet.</p> : tasks.map(task => <button key={task.task_id} type="button" onClick={() => setSelected(task)} title={timestamp(task.finished_at ?? task.started_at)} className={cn("w-full rounded-lg border p-3 text-left hover:bg-white/[0.04]", selected?.task_id === task.task_id && "border-primary/40 bg-primary/[0.04]")}><div className="flex items-center justify-between gap-2"><span className="truncate text-xs font-medium text-foreground">{task.tool_name}</span><Status status={task.status} /></div><p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">{task.result ? preview(task.result.output) : "Awaiting result"}</p><p className="mt-1.5 text-[11px] text-muted-foreground/70">{timestamp(task.finished_at ?? task.started_at)} · {duration(task.result?.duration)}</p></button>)}</div></section><p className="px-1 text-xs text-muted-foreground">{capabilities.length} capabilities exposed by the Tool Runtime.</p></aside></section></div></main></div></div>; }
+function Tools() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const realtime = useRealtime();
+  const state = useTools(realtime);
+  const { agents } = useAgents(realtime);
+  const now = useNow();
+
+  const [query, setQuery] = useState("");
+  const [availability, setAvailability] = useState<AvailabilityFilter>("all");
+  const [effects, setEffects] = useState<EffectsFilter>("all");
+  const tab: Tab = params.get("tab") === "runs" ? "runs" : "tools";
+  const selectedName = params.get("tool");
+  const selected = state.tools.find((tool) => tool.name === selectedName) ?? null;
+  const visible = filterTools(state.tools, { query, availability, effects });
+  const showFilters = availableFilters(state.tools);
+  const filtered = query.trim() !== "" || availability !== "all" || effects !== "all";
+
+  function go(next: { tool?: string | null; tab?: Tab }, mode: "push" | "replace" = "replace") {
+    const search = new URLSearchParams();
+    const nextTab = next.tab ?? tab;
+    const tool = next.tool !== undefined ? next.tool : selectedName;
+    if (nextTab === "runs") search.set("tab", "runs");
+    else if (tool) search.set("tool", tool);
+    const queryString = search.toString();
+    router[mode](queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
+  }
+
+  function clearFilters() {
+    setQuery("");
+    setAvailability("all");
+    setEffects("all");
+  }
+
+  const tabs: TabItem<Tab>[] = [
+    { value: "tools", label: "Tools", badge: state.loading && state.tools.length === 0 ? undefined : state.tools.length },
+    { value: "runs", label: "Recent runs", badge: state.loading && state.tasks.length === 0 ? undefined : state.tasks.length },
+  ];
+
+  return (
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+      <RealtimeNotifications events={realtime.latestEvent ? [realtime.latestEvent] : []} />
+      <PageHeader title="Tools" description="Capabilities Genesis can give your Agents. An Agent only uses the tools allowed in its settings, and the server checks every call." />
+
+      {state.error && state.tools.length === 0 ? (
+        <Alert tone="danger" action={<Button size="sm" onClick={() => void state.retry()} loading={state.loading}>Try again</Button>}>
+          <p className="font-medium">Tools couldn&apos;t be loaded.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{state.error}</p>
+        </Alert>
+      ) : (
+        <>
+          {state.error && <Alert tone="warning" action={<Button size="sm" onClick={() => void state.retry()} loading={state.loading}>Refresh</Button>}>Couldn&apos;t refresh: {state.error}</Alert>}
+          <div>
+            <Tabs idPrefix={TAB_PREFIX} label="Tools views" items={tabs} value={tab} onChange={(value) => go({ tab: value })} />
+            <div {...tabPanelProps(TAB_PREFIX, tab)} className="pt-5 focus:outline-none">
+              {tab === "runs" ? (
+                <RecentRuns state={state} now={now} />
+              ) : state.loading && state.tools.length === 0 ? (
+                <div className="flex flex-col gap-2" aria-busy="true" aria-label="Loading tools">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-16 w-full" />)}</div>
+              ) : state.tools.length === 0 ? (
+                <EmptyState icon={Wrench} title="No tools registered" description="The server hasn't registered any tools, so Agents can only answer from the model." />
+              ) : (
+                <div className="flex flex-col gap-4">
+                  <div className={cn("flex flex-col gap-2 sm:flex-row sm:items-center", selected && "hidden lg:flex")}>
+                    <div className="relative sm:w-72">
+                      <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <Input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools" aria-label="Search tools by name, purpose or capability" className="pl-8 pr-8" />
+                      {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"><X aria-hidden className="h-3.5 w-3.5" /></button>}
+                    </div>
+                    {showFilters.availability && (
+                      <Select aria-label="Availability" value={availability} onChange={(event) => setAvailability(event.target.value as AvailabilityFilter)} className="sm:w-40">
+                        <option value="all">Any availability</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option>
+                      </Select>
+                    )}
+                    {showFilters.effects && (
+                      <Select aria-label="Effects" value={effects} onChange={(event) => setEffects(event.target.value as EffectsFilter)} className="sm:w-52">
+                        <option value="all">Any effects</option><option value="none">No outside effects</option><option value="external">May change things outside</option>
+                      </Select>
+                    )}
+                    <p className="text-xs text-muted-foreground sm:ml-auto" aria-live="polite">{filtered ? `${visible.length} of ${state.tools.length} tools` : `${state.tools.length} tools`}</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+                    <div className={cn("min-w-0", selected && "hidden lg:block")}>
+                      {visible.length === 0 ? (
+                        <EmptyState icon={Search} title="No tools match" description="Try another search or clear the filters." action={<Button size="sm" onClick={clearFilters}>Clear search and filters</Button>} />
+                      ) : (
+                        <ul aria-label="Tools" className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
+                          {visible.map((tool) => <ToolRow key={tool.name} tool={tool} allowedCount={agentsAllowing(tool, agents).length} selected={tool.name === selectedName} onSelect={() => go({ tool: tool.name }, "push")} />)}
+                        </ul>
+                      )}
+                    </div>
+                    <section aria-label="Tool details" className={cn("min-w-0 rounded-lg border border-border bg-surface p-4 sm:p-5", !selected && "hidden lg:block")}>
+                      {selected ? (
+                        <ToolDetail key={selected.name} tool={selected} agents={agents} tasks={state.tasks} now={now}
+                          pending={state.pendingToolNames.has(selected.name)} onRun={(args) => state.execute(selected.name, args)} onBack={() => go({ tool: null })} />
+                      ) : (
+                        <div className="flex min-h-48 flex-col items-center justify-center text-center">
+                          <Wrench aria-hidden className="h-5 w-5 text-muted-foreground" />
+                          <p className="mt-2 text-sm text-foreground">Select a tool to see what it does</p>
+                          <p className="mt-1 max-w-xs text-xs text-muted-foreground">Its inputs, which Agents may use it, its restrictions and recent runs.</p>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ToolRow({ tool, allowedCount, selected, onSelect }: { tool: ToolDefinition; allowedCount: number; selected: boolean; onSelect: () => void }) {
+  const Icon = ICONS[tool.name] ?? Wrench;
+  return (
+    <li>
+      <button type="button" data-tool={tool.name} onClick={onSelect} aria-current={selected ? "true" : undefined}
+        className={cn("relative flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.025]", selected && "bg-white/[0.05]")}>
+        {selected && <span aria-hidden className="absolute inset-y-2.5 left-0 w-0.5 rounded-full bg-accent" />}
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border-strong bg-surface-2 text-muted-foreground"><Icon aria-hidden className="h-4 w-4" /></span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-foreground">{toolLabel(tool.name)}</span>
+            {!tool.enabled && <StatusBadge status="disabled" />}
+          </span>
+          <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{tool.description}</span>
+          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-subtle">
+            <span>{allowedCount === 0 ? "Not allowed for any Agent" : `Allowed for ${allowedCount} Agent${allowedCount === 1 ? "" : "s"}`}</span>
+            {tool.side_effects && <span className="inline-flex items-center gap-1 text-warning"><ShieldAlert aria-hidden className="h-3 w-3" />May change things outside Genesis</span>}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function RecentRuns({ state, now }: { state: ReturnType<typeof useTools>; now: Date }) {
+  if (state.loading && state.tasks.length === 0) return <div className="flex flex-col gap-2" aria-busy="true">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-10 w-full" />)}</div>;
+  if (state.tasks.length === 0) return <EmptyState icon={Wrench} title="No tool runs yet" description="Runs appear here when an Agent calls a tool or you run a test. They're kept in memory until the backend restarts." />;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">Newest first. The server keeps the latest 1,000 runs in memory until it restarts. Expand a run to see its result.</p>
+      <ul aria-label="Recent tool runs" className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
+        {state.tasks.slice(0, 100).map((task) => <ToolRunRow key={task.task_id} task={task} now={now} showTool />)}
+      </ul>
+      {state.tasks.length > 100 && <p className="text-[11px] text-subtle">Showing the 100 most recent of {state.tasks.length}.</p>}
+    </div>
+  );
+}

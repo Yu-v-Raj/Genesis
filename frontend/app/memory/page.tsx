@@ -1,204 +1,297 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
-import {
-  Bot,
-  BrainCircuit,
-  Clock3,
-  ChevronRight,
-  CircleAlert,
-  FileText,
-  Heart,
-  Info,
-  Lightbulb,
-  LoaderCircle,
-  Pencil,
-  Plus,
-  Search,
-  Tag,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { BrainCircuit, ChevronDown, Plus, Search, X } from "lucide-react";
 
-import { ErrorState } from "@/components/dashboard/error-state";
+import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { RealtimeNotifications } from "@/components/dashboard/realtime-notifications";
-import { RealtimeStatus } from "@/components/dashboard/realtime-status";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Topbar } from "@/components/layout/topbar";
+import { MemoryEditor } from "@/components/memory/memory-editor";
+import { MemoryDetail, MemoryRow } from "@/components/memory/memory-record";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
+import { Alert, EmptyState, Skeleton } from "@/components/ui/feedback";
+import { Input } from "@/components/ui/field";
+import { Menu } from "@/components/ui/menu";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { useAgents } from "@/hooks/use-agents";
 import { useMemory } from "@/hooks/use-memory";
+import { useNow } from "@/hooks/use-now";
 import { useRealtime } from "@/hooks/use-realtime";
+import { filterByKind, kindFilters, summarize, type KindFilter } from "@/lib/memory";
+import { statusPresentation } from "@/lib/status";
 import { cn } from "@/lib/utils";
-import type { CreateMemoryInput, MemoryKind, MemoryRecord } from "@/types/memory";
+import type { Agent } from "@/types/agents";
+import type { CreateMemoryInput, MemoryRecord } from "@/types/memory";
 
-const kinds: MemoryKind[] = ["fact", "note", "preference", "context"];
-const kindTone: Record<MemoryKind, string> = {
-  fact: "border-sky-400/25 bg-sky-400/10 text-sky-200",
-  note: "border-violet-400/25 bg-violet-400/10 text-violet-200",
-  preference: "border-pink-400/25 bg-pink-400/10 text-pink-200",
-  context: "border-amber-400/25 bg-amber-400/10 text-amber-200",
-};
-const kindIcon: Record<MemoryKind, typeof FileText> = {
-  fact: Lightbulb,
-  note: FileText,
-  preference: Heart,
-  context: Info,
-};
-
-function formattedTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
-}
-
-function parseTags(value: string): string[] {
-  return [...new Set(value.split(",").map((tag) => tag.trim()).filter(Boolean))];
-}
-
-function metadataText(metadata: Record<string, unknown>): string {
-  return Object.keys(metadata).length === 0 ? "" : JSON.stringify(metadata, null, 2);
-}
-
-function parseMetadata(value: string): Record<string, unknown> | null {
-  if (!value.trim()) return {};
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function KindBadge({ kind }: { kind: MemoryKind }) {
-  const Icon = kindIcon[kind];
-  return <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize", kindTone[kind])}><Icon aria-hidden className="h-3 w-3" />{kind}</span>;
-}
-
-function MemoryListSkeleton() {
-  return <div aria-label="Loading memories" className="space-y-3">
-    {[0, 1, 2].map((item) => <div key={item} className="animate-pulse rounded-xl border border-border bg-surface p-4"><div className="h-4 w-20 rounded bg-white/[0.08]" /><div className="mt-3 h-4 w-11/12 rounded bg-white/[0.06]" /><div className="mt-2 h-4 w-3/4 rounded bg-white/[0.06]" /><div className="mt-4 h-5 w-32 rounded bg-white/[0.05]" /></div>)}
-  </div>;
-}
-
-function MetadataPreview({ metadata }: { metadata: Record<string, unknown> }) {
-  const value = metadataText(metadata) || "{}";
-  return <details className="group rounded-lg border border-white/[0.07] bg-background/70">
-    <summary className="cursor-pointer list-none px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary"><span className="group-open:hidden">Show metadata</span><span className="hidden group-open:inline">Hide metadata</span></summary>
-    <pre className="max-h-48 overflow-auto border-t border-white/[0.07] p-3 font-mono text-[11px] leading-5 text-slate-200">{value}</pre>
-  </details>;
-}
-
-function MemoryForm({ initial, pending, submitLabel, onCancel, onSubmit }: {
-  initial?: MemoryRecord;
-  pending: boolean;
-  submitLabel: string;
-  onCancel?: () => void;
-  onSubmit: (input: CreateMemoryInput) => Promise<boolean>;
-}) {
-  const [content, setContent] = useState(initial?.content ?? "");
-  const [kind, setKind] = useState<MemoryKind>(initial?.kind ?? "note");
-  const [tags, setTags] = useState(initial?.tags.join(", ") ?? "");
-  const [metadata, setMetadata] = useState(metadataText(initial?.metadata ?? {}));
-  const [validation, setValidation] = useState<string | null>(null);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const parsedMetadata = parseMetadata(metadata);
-    if (!content.trim()) return setValidation("Content is required.");
-    if (content.trim().length > 10_000) return setValidation("Content must be 10,000 characters or fewer.");
-    if (parsedMetadata === null) return setValidation("Metadata must be a JSON object.");
-    setValidation(null);
-    const saved = await onSubmit({ content: content.trim(), kind, tags: parseTags(tags), metadata: parsedMetadata });
-    if (saved && !initial) {
-      setContent("");
-      setKind("note");
-      setTags("");
-      setMetadata("");
-    }
-  }
-
-  return <form onSubmit={(event) => void submit(event)} className="space-y-4" noValidate>
-    <label className="block text-sm font-medium text-foreground">Content<textarea value={content} onChange={(event) => setContent(event.target.value)} required maxLength={10_000} rows={5} className="mt-1.5 w-full resize-y rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25" placeholder="What should this agent remember?" /></label>
-    <div className="grid gap-4 sm:grid-cols-2">
-      <label className="block text-sm font-medium text-foreground">Kind<select value={kind} onChange={(event) => setKind(event.target.value as MemoryKind)} className="mt-1.5 w-full rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25">{kinds.map((value) => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}</select></label>
-      <label className="block text-sm font-medium text-foreground">Tags<span className="ml-1 font-normal text-muted-foreground">(comma separated)</span><input value={tags} onChange={(event) => setTags(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25" placeholder="project, runtime" /></label>
-    </div>
-    <label className="block text-sm font-medium text-foreground">Metadata <span className="font-normal text-muted-foreground">(JSON object)</span><textarea value={metadata} onChange={(event) => setMetadata(event.target.value)} rows={3} className="mt-1.5 w-full resize-y rounded-lg border border-border bg-background/60 px-3 py-2 font-mono text-xs text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25" placeholder={'{"source":"operator"}'} /></label>
-    {validation && <p role="alert" className="flex items-center gap-2 rounded-lg border border-red-400/25 bg-red-400/5 px-3 py-2 text-sm text-red-200"><CircleAlert className="h-4 w-4 shrink-0" />{validation}</p>}
-    <div className="flex flex-wrap justify-end gap-2"><>{onCancel && <button type="button" onClick={onCancel} disabled={pending} className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground disabled:opacity-50">Cancel</button>}</><button type="submit" disabled={pending} className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition hover:bg-primary/85 disabled:cursor-not-allowed disabled:opacity-50">{pending && <LoaderCircle className="h-4 w-4 animate-spin" />}{pending ? "Saving…" : submitLabel}</button></div>
-  </form>;
-}
+const SEARCH_DELAY_MS = 300;
 
 export default function MemoryPage() {
+  // The Agent and the open memory live in the URL (?agent=…&memory=…) so a reload, the
+  // Back button or a link from an Agent opens the same place. useSearchParams needs Suspense.
+  return (
+    <Suspense fallback={<MemorySkeleton />}>
+      <MemoryLibrary />
+    </Suspense>
+  );
+}
+
+function MemorySkeleton() {
+  return (
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8" aria-busy="true">
+      <Skeleton className="h-8 w-40" /><Skeleton className="h-14 w-full" /><Skeleton className="h-80 w-full" />
+    </div>
+  );
+}
+
+function useDebounced<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delay);
+    return () => window.clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
+
+type Editing = { mode: "add" } | { mode: "edit"; record: MemoryRecord } | null;
+
+function MemoryLibrary() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const realtime = useRealtime();
   const agentsState = useAgents(realtime);
-  const [chosenAgentId, setChosenAgentId] = useState<string | null>(null);
-  // Derived, not synced by an effect: the chosen Agent while it exists, else the first one.
-  const selectedAgentId = chosenAgentId !== null && agentsState.agents.some((agent) => agent.id === chosenAgentId)
-    ? chosenAgentId
-    : agentsState.agents[0]?.id ?? null;
-  const memory = useMemory(selectedAgentId, realtime);
-  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
-  // The latest version of the selected record, or nothing once it is gone.
-  const selected = memory.memories.find((item) => item.memory_id === selectedMemoryId) ?? null;
-  const setSelected = (record: MemoryRecord | null) => setSelectedMemoryId(record?.memory_id ?? null);
-  const [search, setSearch] = useState("");
-  const [addOpen, setAddOpen] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const notificationEvents = useMemo(
-    () => realtime.latestEvent ? [realtime.latestEvent] : [],
-    [realtime.latestEvent]
+  const now = useNow();
+
+  const agents = agentsState.agents;
+  const requestedAgentId = params.get("agent");
+  // The requested Agent while it exists, otherwise the first one (as before).
+  const agent: Agent | null = agents.find((item) => item.id === requestedAgentId) ?? agents[0] ?? null;
+  const selectedMemoryId = params.get("memory");
+
+  const [query, setQuery] = useState("");
+  const debouncedQuery = useDebounced(query, SEARCH_DELAY_MS);
+  const [kind, setKind] = useState<KindFilter>("all");
+  const [editing, setEditing] = useState<Editing>(null);
+  const [deleting, setDeleting] = useState<{ record: MemoryRecord; error: string | null } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const memory = useMemory(agent?.id ?? null, debouncedQuery, realtime);
+  // Only records that answer this Agent and this search; never another Agent's.
+  const current = memory.view && agent && memory.view.agentId === agent.id && memory.view.query === debouncedQuery.trim()
+    ? memory.records.filter((record) => record.agent_id === agent.id)
+    : null;
+  const filters = current ? kindFilters(current) : [];
+  const activeKind = filters.some((item) => item.value === kind) ? kind : "all";
+  const visible = current ? filterByKind(current, activeKind) : [];
+  const selected = current?.find((record) => record.memory_id === selectedMemoryId) ?? null;
+  const searching = query.trim() !== "";
+  const settling = query.trim() !== debouncedQuery.trim() || (memory.loading && current !== null);
+
+  useEffect(() => {
+    if (notice === null) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  function navigate(next: { agent?: string | null; memory?: string | null }, mode: "push" | "replace" = "replace") {
+    const search = new URLSearchParams();
+    const agentId = next.agent !== undefined ? next.agent : agent?.id ?? null;
+    const memoryId = next.memory !== undefined ? next.memory : selectedMemoryId;
+    if (agentId) search.set("agent", agentId);
+    if (memoryId) search.set("memory", memoryId);
+    const queryString = search.toString();
+    router[mode](queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
+  }
+
+  function switchAgent(agentId: string) {
+    setQuery("");
+    setKind("all");
+    navigate({ agent: agentId, memory: null }, "push");
+  }
+
+  async function submitEditor(input: CreateMemoryInput): Promise<string | null> {
+    if (!agent || !editing) return "No Agent is selected.";
+    if (editing.mode === "add") {
+      const result = await memory.create(agent.id, input);
+      if (result.record === null) return result.error;
+      setNotice(`Memory added to ${agent.name}.`);
+      setQuery("");
+      setKind("all");
+      navigate({ memory: result.record.memory_id });
+      return null;
+    }
+    const result = await memory.update(editing.record.memory_id, input);
+    if (result.record === null) return result.error;
+    setNotice("Changes saved.");
+    return null;
+  }
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    const result = await memory.remove(deleting.record.memory_id);
+    if (!result.ok) {
+      setDeleting({ ...deleting, error: result.error });
+      return;
+    }
+    setDeleting(null);
+    setNotice("Memory deleted.");
+    if (selectedMemoryId === deleting.record.memory_id) navigate({ memory: null });
+  }
+
+  const agentMenu = agents.map((item) => ({
+    key: item.id,
+    label: item.name,
+    description: statusPresentation(item.status).label,
+    checked: item.id === agent?.id,
+    onSelect: () => switchAgent(item.id),
+  }));
+
+  return (
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+      <RealtimeNotifications events={realtime.latestEvent ? [realtime.latestEvent] : []} />
+      <PageHeader
+        title="Memory"
+        description="What each Agent remembers. Memories are included with every message the Agent receives — review, edit or remove them here."
+        actions={agent && <Button variant="primary" icon={<Plus aria-hidden className="h-4 w-4" />} onClick={() => setEditing({ mode: "add" })}>Add memory</Button>}
+      />
+      <p role="status" aria-live="polite" className={cn("text-sm text-success", !notice && "sr-only")}>{notice ?? ""}</p>
+
+      {agentsState.loading && agents.length === 0 ? (
+        <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading Agents"><Skeleton className="h-14 w-full" /><Skeleton className="h-64 w-full" /></div>
+      ) : agentsState.error && agents.length === 0 ? (
+        <Alert tone="danger" action={<Button size="sm" onClick={() => void agentsState.retry()}>Try again</Button>}>
+          <p className="font-medium">Agents couldn&apos;t be loaded, so their memories can&apos;t be shown.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{agentsState.error}</p>
+        </Alert>
+      ) : agent === null ? (
+        <EmptyState icon={BrainCircuit} title="No Agents yet" description="Memories belong to an Agent. Create an Agent first, then add what it should remember."
+          action={<Link href="/agents?create=1" className={buttonClasses("primary", "sm")}><Plus aria-hidden className="h-3.5 w-3.5" />Create an Agent</Link>} />
+      ) : (
+        <>
+          <section aria-label="Agent" className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <AgentAvatar name={agent.name} />
+              <div className="min-w-0">
+                <p className="text-[11px] uppercase tracking-wider text-subtle">Memories of</p>
+                <p className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-sm font-semibold text-foreground" title={agent.name}>{agent.name}</span>
+                  <StatusBadge status={agent.status} className="shrink-0" />
+                </p>
+              </div>
+            </div>
+            <Menu heading="Show memories of" triggerLabel={`Change Agent (current: ${agent.name})`} items={agentMenu} width="w-72" align="end"
+              trigger={<>Change Agent<ChevronDown aria-hidden className="h-3.5 w-3.5" /></>} triggerClassName={cn(buttonClasses("secondary", "sm"), "self-start sm:self-auto")} />
+          </section>
+
+          <div className={cn("flex flex-col gap-2", selected && "hidden lg:flex")}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <div className="relative sm:w-80">
+                <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input ref={searchRef} type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search text, tags and metadata"
+                  aria-label={`Search ${agent.name}'s memories`} aria-describedby="memory-search-hint" className="pl-8 pr-8" />
+                {query && (
+                  <button type="button" onClick={() => { setQuery(""); searchRef.current?.focus(); }} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground">
+                    <X aria-hidden className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              {filters.length > 2 && (
+                <div role="group" aria-label="Filter by kind" className="flex flex-wrap gap-1">
+                  {filters.map((item) => (
+                    <button key={item.value} type="button" aria-pressed={activeKind === item.value} onClick={() => setKind(item.value)}
+                      className={cn("inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors", activeKind === item.value ? "bg-white/[0.08] text-foreground" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground")}>
+                      {item.label}<span className="tabular-nums text-subtle">{item.count}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <p id="memory-search-hint" className="text-[11px] text-subtle" aria-live="polite">
+              {current === null ? (memory.error ? "" : "Loading…")
+                : searching ? `${current.length} ${current.length === 1 ? "memory matches" : "memories match"} “${debouncedQuery.trim()}” (plain text match, not case-sensitive)${settling ? " · updating…" : ""}`
+                : `${current.length} ${current.length === 1 ? "memory" : "memories"}${activeKind !== "all" ? ` · showing ${visible.length}` : ""}${settling ? " · updating…" : ""}`}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
+            <div className={cn("min-w-0", selected && "hidden lg:block")}>
+              {memory.error && current === null ? (
+                <Alert tone="danger" action={<Button size="sm" onClick={memory.reload}>Try again</Button>}>
+                  <p className="font-medium">{searching ? "The search failed." : `${agent.name}'s memories couldn't be loaded.`}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{memory.error}</p>
+                </Alert>
+              ) : current === null ? (
+                <div className="flex flex-col gap-px overflow-hidden rounded-lg border border-border bg-border" aria-busy="true" aria-label="Loading memories">
+                  {Array.from({ length: 3 }, (_, index) => <div key={index} className="space-y-2 bg-surface p-4"><Skeleton className="h-4 w-11/12" /><Skeleton className="h-4 w-2/3" /><Skeleton className="h-3 w-24" /></div>)}
+                </div>
+              ) : current.length === 0 ? (
+                searching ? (
+                  <EmptyState icon={Search} title="No memories match" description={`Nothing in ${agent.name}'s memory contains “${debouncedQuery.trim()}”.`}
+                    action={<Button size="sm" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>Clear search</Button>} />
+                ) : (
+                  <EmptyState icon={BrainCircuit} title={`${agent.name} doesn't remember anything yet`}
+                    description="Add facts, preferences or context this Agent should know. They'll be included with every message it receives."
+                    action={<Button variant="primary" size="sm" icon={<Plus aria-hidden className="h-3.5 w-3.5" />} onClick={() => setEditing({ mode: "add" })}>Add memory</Button>} />
+                )
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                  {memory.error && <Alert tone="warning" className="m-2"><span className="text-xs">Couldn&apos;t refresh: {memory.error}</span></Alert>}
+                  <ul aria-label={`${agent.name}'s memories`} className={cn("max-h-[38rem] divide-y divide-border overflow-y-auto transition-opacity", settling && "opacity-70")}>
+                    {visible.map((record) => (
+                      <MemoryRow key={record.memory_id} record={record} selected={record.memory_id === selectedMemoryId} now={now}
+                        onSelect={() => navigate({ memory: record.memory_id }, "push")} />
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <section aria-label="Memory details" className={cn("min-w-0 rounded-lg border border-border bg-surface p-4 sm:p-5", !selected && "hidden lg:block")}>
+              {selected ? (
+                <MemoryDetail key={selected.memory_id} record={selected} agentName={agent.name} now={now} busy={memory.pendingIds.has(selected.memory_id)}
+                  onEdit={() => setEditing({ mode: "edit", record: selected })}
+                  onDelete={() => setDeleting({ record: selected, error: null })}
+                  onBack={() => navigate({ memory: null })} />
+              ) : (
+                <div className="flex min-h-48 flex-col items-center justify-center text-center">
+                  <BrainCircuit aria-hidden className="h-5 w-5 text-muted-foreground" />
+                  <p className="mt-2 text-sm text-foreground">Select a memory to read it in full</p>
+                  <p className="mt-1 max-w-xs text-xs text-muted-foreground">You can edit or delete it from there.</p>
+                </div>
+              )}
+            </section>
+          </div>
+        </>
+      )}
+
+      {editing && agent && (
+        <MemoryEditor key={editing.mode === "edit" ? editing.record.memory_id : "new"} record={editing.mode === "edit" ? editing.record : null}
+          agentName={agent.name} onClose={() => setEditing(null)} onSubmit={submitEditor} />
+      )}
+
+      <Dialog
+        open={deleting !== null}
+        onClose={() => { if (!deleting || !memory.pendingIds.has(deleting.record.memory_id)) setDeleting(null); }}
+        title="Delete this memory?"
+        description={agent ? `${agent.name} will no longer remember it. This can't be undone.` : undefined}
+        footer={deleting && (
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button onClick={() => setDeleting(null)} disabled={memory.pendingIds.has(deleting.record.memory_id)} data-autofocus>Cancel</Button>
+            <Button variant="danger" onClick={() => void confirmDelete()} loading={memory.pendingIds.has(deleting.record.memory_id)}>Delete memory</Button>
+          </div>
+        )}
+      >
+        {deleting && (
+          <div className="flex flex-col gap-3">
+            <blockquote className="break-words rounded-md border border-border bg-surface-2 px-3 py-2 text-sm leading-6 text-foreground">“{summarize(deleting.record.content, 240)}”</blockquote>
+            {deleting.error && <Alert tone="danger">It wasn&apos;t deleted: {deleting.error}</Alert>}
+          </div>
+        )}
+      </Dialog>
+    </div>
   );
-
-  const counts = useMemo(() => kinds.map((kind) => ({ kind, count: memory.memories.filter((item) => item.kind === kind).length })), [memory.memories]);
-  const selectedAgent = agentsState.agents.find((agent) => agent.id === selectedAgentId);
-
-  async function runSearch(event?: FormEvent) {
-    event?.preventDefault();
-    if (selectedAgentId === null) return;
-    if (!search.trim()) return memory.load(selectedAgentId);
-    await memory.search(selectedAgentId, search.trim());
-  }
-
-  async function create(input: CreateMemoryInput): Promise<boolean> {
-    if (selectedAgentId === null) return false;
-    setCreating(true);
-    try {
-      const record = await memory.create(selectedAgentId, input);
-      if (record) {
-        setSelected(record);
-        setAddOpen(false);
-        return true;
-      }
-      return false;
-    } finally { setCreating(false); }
-  }
-
-  async function update(input: CreateMemoryInput): Promise<boolean> {
-    if (!selected) return false;
-    const record = await memory.update(selected.memory_id, input);
-    if (record) { setSelected(record); setEditing(false); return true; }
-    return false;
-  }
-
-  async function remove() {
-    if (!selected) return;
-    if (await memory.remove(selected.memory_id)) { setSelected(null); setConfirmDelete(false); }
-  }
-
-  const retry = () => selectedAgentId && void memory.load(selectedAgentId);
-
-  return <div className="flex h-screen w-full overflow-hidden"><Sidebar /><div className="flex min-w-0 flex-1 flex-col overflow-hidden"><Topbar /><main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8"><div className="mx-auto flex max-w-7xl flex-col gap-6"><RealtimeNotifications events={notificationEvents} />
-    <div className="flex flex-col gap-4 border-b border-border/70 pb-5 sm:flex-row sm:items-end sm:justify-between"><div><div className="flex items-center gap-2"><span className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/20 bg-primary/10"><BrainCircuit className="h-4 w-4 text-primary" /></span><div><h1 className="text-2xl font-semibold tracking-tight text-foreground">Memory</h1><p className="mt-0.5 text-sm text-muted-foreground">Saved facts and preferences for each Agent. An Agent sees its own memories (newest first) in every conversation, so don&apos;t store secrets here.</p></div></div><div className="mt-3"><RealtimeStatus connectionStatus={realtime.connectionStatus} runtimeState="memory runtime" lastHeartbeat={null} /></div></div><button type="button" onClick={() => setAddOpen(true)} disabled={!selectedAgentId} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white shadow-sm shadow-primary/20 transition hover:bg-primary/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"><Plus className="h-4 w-4" />Add Memory</button></div>
-    {agentsState.loading ? <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted-foreground"><LoaderCircle className="mr-2 inline h-4 w-4 animate-spin" />Loading agents…</div> : agentsState.error && agentsState.agents.length === 0 ? <ErrorState message={agentsState.error} onRetry={() => void agentsState.retry()} /> : agentsState.agents.length === 0 ? <section className="rounded-xl border border-dashed border-border bg-surface px-6 py-14 text-center"><BrainCircuit className="mx-auto h-8 w-8 text-primary" /><h2 className="mt-4 text-lg font-semibold text-foreground">No agents available</h2><p className="mt-2 text-sm text-muted-foreground">Create an agent before adding agent-scoped runtime memory.</p></section> : <>
-      <section aria-label="Memory scope" className="grid gap-4 rounded-xl border border-border bg-surface p-4 shadow-sm lg:grid-cols-[minmax(0,1fr)_auto]"><label className="min-w-0 text-sm font-medium text-foreground"><span className="flex items-center gap-1.5"><Bot className="h-3.5 w-3.5 text-primary" />Agent</span><select aria-label="Select an agent" value={selectedAgentId ?? ""} onChange={(event) => { setChosenAgentId(event.target.value || null); setSearch(""); setSelected(null); }} className="mt-1.5 w-full rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25">{agentsState.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label><div className="self-end rounded-lg border border-white/[0.06] bg-white/[0.025] px-3 py-2 text-xs text-muted-foreground">{selectedAgent?.description || "Agent-scoped memory"}</div></section>
-      <section aria-label="Memory statistics" className="grid grid-cols-2 gap-3 sm:grid-cols-5"><div className="rounded-xl border border-border bg-surface px-4 py-3 shadow-sm"><span className="text-xs font-medium text-muted-foreground">Total memories</span><p className="mt-2 text-2xl font-semibold text-foreground">{memory.memories.length}</p></div>{counts.map(({ kind, count }) => <div key={kind} className="rounded-xl border border-border bg-surface px-4 py-3 shadow-sm"><KindBadge kind={kind} /><p className="mt-2 text-2xl font-semibold text-foreground">{count}</p></div>)}</section>
-      {memory.error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-400/25 bg-red-400/5 px-4 py-3 text-sm text-red-200"><span>{memory.error}</span><button type="button" onClick={retry} className="rounded-md border border-red-400/25 px-3 py-1.5 text-xs font-medium transition hover:bg-red-400/10">Retry</button></div>}
-      <form onSubmit={(event) => void runSearch(event)} className="flex flex-col gap-2 sm:flex-row"><label className="relative min-w-0 flex-1"><span className="sr-only">Search memories</span><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={search} onChange={(event) => setSearch(event.target.value)} className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/25" placeholder="Search this agent’s memory by text" /></label><button type="submit" disabled={memory.searching} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-white/5 hover:text-foreground disabled:opacity-50">{memory.searching && <LoaderCircle className="h-4 w-4 animate-spin" />}{memory.searching ? "Searching…" : "Search"}</button>{search && <button type="button" onClick={() => { setSearch(""); retry(); }} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground"><X className="h-4 w-4" />Clear</button>}</form>
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.8fr)]"><section aria-live="polite" className="min-w-0 space-y-3">{memory.loading ? <MemoryListSkeleton /> : memory.memories.length === 0 ? <div className="rounded-xl border border-dashed border-border bg-surface p-10 text-center"><FileText className="mx-auto h-7 w-7 text-primary" /><h2 className="mt-3 font-semibold text-foreground">{search ? "No matching memories" : "No memories yet"}</h2><p className="mx-auto mt-1 max-w-sm text-sm leading-6 text-muted-foreground">{search ? "Try a different deterministic text search." : "Add a memory for this agent to start building context."}</p>{!search && <button type="button" onClick={() => setAddOpen(true)} className="mt-5 inline-flex items-center gap-2 rounded-lg border border-primary/30 px-3 py-2 text-sm font-medium text-primary transition hover:bg-primary/10"><Plus className="h-4 w-4" />Add memory</button>}</div> : memory.memories.map((item) => <button key={item.memory_id} type="button" onClick={() => { setSelected(item); setEditing(false); setConfirmDelete(false); }} className={cn("w-full rounded-xl border bg-surface p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-white/20 hover:shadow-md hover:shadow-black/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary", selected?.memory_id === item.memory_id ? "border-primary/60 bg-primary/[0.035] ring-1 ring-primary/25" : "border-border")}><div className="flex items-start gap-3"><FileText className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><KindBadge kind={item.kind} /><span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Clock3 className="h-3 w-3" />Updated {formattedTime(item.updated_at)}</span></div><p className="mt-2 line-clamp-2 text-sm leading-6 text-foreground">{item.content}</p>{item.tags.length > 0 && <div className="mt-3 flex flex-wrap gap-1.5">{item.tags.map((tag) => <span key={tag} className="inline-flex max-w-full items-center gap-1 truncate rounded-md border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-muted-foreground"><Tag className="h-3 w-3 shrink-0" />{tag}</span>)}</div>}</div><span className="mt-1 inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">Details<ChevronRight className="h-4 w-4" /></span></div></button>)}</section>
-      <aside className="min-w-0"><section className="sticky top-2 rounded-xl border border-border bg-surface p-5 shadow-sm">{!selected ? <div className="py-10 text-center"><Info className="mx-auto h-6 w-6 text-primary" /><h2 className="mt-3 font-semibold text-foreground">Select a memory</h2><p className="mt-1 text-sm text-muted-foreground">View and manage its full runtime record.</p></div> : editing ? <><div className="mb-5 flex items-center justify-between"><div><h2 className="font-semibold text-foreground">Edit memory</h2><p className="mt-1 text-xs text-muted-foreground">Update the record and save when ready.</p></div><KindBadge kind={selected.kind} /></div><MemoryForm initial={selected} pending={memory.pendingMemoryIds.has(selected.memory_id)} submitLabel="Save changes" onCancel={() => setEditing(false)} onSubmit={update} /></> : <><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Overview</p><div className="mt-1 flex items-center gap-2"><h2 className="font-semibold text-foreground">Memory details</h2><KindBadge kind={selected.kind} /></div></div><div className="flex gap-1"><button type="button" onClick={() => setEditing(true)} aria-label="Edit memory" className="rounded-md p-2 text-muted-foreground transition hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><Pencil className="h-4 w-4" /></button><button type="button" onClick={() => setConfirmDelete(true)} aria-label="Delete memory" className="rounded-md p-2 text-red-300 transition hover:bg-red-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"><Trash2 className="h-4 w-4" /></button></div></div><div className="mt-5 rounded-lg border border-white/[0.06] bg-background/35 p-3"><p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Content</p><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-foreground">{selected.content}</p></div><dl className="mt-5 space-y-3 border-t border-border pt-4 text-xs"><div><dt className="text-muted-foreground">Memory ID</dt><dd className="mt-1 break-all font-mono text-foreground">{selected.memory_id}</dd></div><div><dt className="text-muted-foreground">Agent ID</dt><dd className="mt-1 break-all font-mono text-foreground">{selected.agent_id}</dd></div><div><dt className="text-muted-foreground">Created</dt><dd className="mt-1 text-foreground">{formattedTime(selected.created_at)}</dd></div><div><dt className="text-muted-foreground">Updated</dt><dd className="mt-1 text-foreground">{formattedTime(selected.updated_at)}</dd></div>{selected.tags.length > 0 && <div><dt className="text-muted-foreground">Tags</dt><dd className="mt-1 flex flex-wrap gap-1.5">{selected.tags.map((tag) => <span key={tag} className="max-w-full truncate rounded-md border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-muted-foreground">{tag}</span>)}</dd></div>}<div><dt className="text-muted-foreground">Metadata</dt><dd className="mt-1"><MetadataPreview metadata={selected.metadata} /></dd></div></dl>{confirmDelete && <div role="alertdialog" aria-label="Confirm memory deletion" className="mt-5 rounded-lg border border-red-400/25 bg-red-400/5 p-3"><p className="text-sm font-medium text-red-100">Delete this memory?</p><p className="mt-1 text-xs leading-5 text-red-200/80">This permanently deletes the memory; the Agent will no longer see it.</p><div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setConfirmDelete(false)} className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-white/5">Cancel</button><button type="button" onClick={() => void remove()} disabled={memory.pendingMemoryIds.has(selected.memory_id)} className="inline-flex items-center gap-1.5 rounded-md bg-red-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-400 disabled:opacity-50">{memory.pendingMemoryIds.has(selected.memory_id) && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}Delete memory</button></div></div>}</>}</section></aside></div>
-    </>}</div></main></div>{addOpen && <div role="dialog" aria-modal="true" aria-labelledby="add-memory-title" className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"><div className="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-2xl"><div className="mb-5 flex items-center justify-between"><div><h2 id="add-memory-title" className="font-semibold text-foreground">Add Memory</h2><p className="mt-1 text-xs text-muted-foreground">{selectedAgent?.name}</p></div><button type="button" onClick={() => setAddOpen(false)} aria-label="Close add memory dialog" className="rounded-md p-2 text-muted-foreground hover:bg-white/5 hover:text-foreground"><X className="h-4 w-4" /></button></div><MemoryForm pending={creating} submitLabel="Add memory" onCancel={() => setAddOpen(false)} onSubmit={create} /></div></div>}</div>;
 }

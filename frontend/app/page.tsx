@@ -1,106 +1,220 @@
 "use client";
 
 import Link from "next/link";
-import { Activity, ArrowUpRight, Bot, CheckCircle2, Clock3, Cpu, Gauge, HeartPulse, Plus, Radio, Server, Wifi, Wrench, Workflow } from "lucide-react";
+import { motion } from "framer-motion";
+import { Activity, ArrowRight, Bot, BrainCircuit, ChevronRight, MessageSquare, Plus, Sparkles } from "lucide-react";
 
-import { EventStream } from "@/components/dashboard/event-stream";
-import { ExecutionInspector } from "@/components/executions/execution-inspector";
-import { ErrorState } from "@/components/dashboard/error-state";
-import { HealthPanel } from "@/components/dashboard/health-panel";
-import { LiveLogViewer } from "@/components/dashboard/live-log-viewer";
 import { RealtimeNotifications } from "@/components/dashboard/realtime-notifications";
-import { RealtimeStatus } from "@/components/dashboard/realtime-status";
-import { ServicesList, type ServiceStatus } from "@/components/dashboard/services-list";
-import { StatsCardSkeleton, StatusCardSkeleton } from "@/components/dashboard/skeletons";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Topbar } from "@/components/layout/topbar";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { Alert, EmptyState, Skeleton } from "@/components/ui/feedback";
+import { Panel, PanelHeader } from "@/components/ui/panel";
+import { StatusBadge, StatusDot } from "@/components/ui/status-badge";
+import { useAgentOptions } from "@/hooks/use-agent-options";
 import { useMonitoring } from "@/hooks/use-monitoring";
-import { useWorkflowSummary } from "@/hooks/use-workflow-summary";
+import { useNow } from "@/hooks/use-now";
+import { executionLabel } from "@/lib/durable-work";
+import { countLabel, operationsQuery, relativeTime, summarizeAgents, summarizeExecutions } from "@/lib/operations";
+import { providerReadiness, type ProviderReadiness } from "@/lib/providers";
+import { cn } from "@/lib/utils";
 
-function formatUptime(seconds: number): string {
-  if (seconds < 60) return `${Math.floor(seconds)}s`;
-  if (seconds < 3_600) return `${Math.floor(seconds / 60)}m`;
-  return `${Math.floor(seconds / 3_600)}h ${Math.floor((seconds % 3_600) / 60)}m`;
+const RECENT = 6;
+const reveal = { initial: { opacity: 0, y: 4 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.18, ease: "easeOut" } } as const;
+
+export default function OverviewPage() {
+  // eventLimit: model-call outcomes for provider readiness can be far back behind heartbeats.
+  const { data, loading, error, retry } = useMonitoring({ eventLimit: 1000 });
+  const options = useAgentOptions();
+  const now = useNow();
+
+  const agentNames: Record<string, string> = Object.fromEntries((data?.agents ?? []).map((agent) => [agent.id, agent.name]));
+  const agents = data ? summarizeAgents(data.agents.map((agent) => agent.status)) : null;
+  const runs = data ? summarizeExecutions(data.executions, now) : null;
+  const providers = options.models && data ? providerReadiness(options.models, data.events) : null;
+  const configured = providers?.filter((provider) => provider.configured).length ?? 0;
+  const responding = providers?.find((provider) => provider.state === "provider_responding");
+
+  return (
+    <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6 sm:py-10">
+      {data && <RealtimeNotifications events={data.events.slice(0, 5)} />}
+
+      <header className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">Your Agent workspace</h1>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+            Create AI Agents, give them tools and memory, and see everything they do — all in one place.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Link href="/agents" className={buttonClasses("ghost")}>Open Agents</Link>
+          <Link href="/agents?create=1" className={buttonClasses("primary", "md", "px-4")}>
+            <Plus aria-hidden className="h-4 w-4" />Create Agent
+          </Link>
+        </div>
+      </header>
+
+      {error && data === null ? (
+        <Alert tone="danger" action={<Button size="sm" onClick={() => void retry()} loading={loading}>Try again</Button>}>
+          <p className="font-medium">Your workspace couldn&apos;t be loaded.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{error}</p>
+        </Alert>
+      ) : (
+        <>
+          {error && <Alert tone="warning" action={<Button size="sm" onClick={() => void retry()} loading={loading}>Refresh</Button>}>Couldn&apos;t refresh: {error}</Alert>}
+
+          {/* One quiet strip of the few numbers that matter, each leading somewhere useful. */}
+          <section aria-label="Workspace summary" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
+            {agents === null || runs === null ? (
+              Array.from({ length: 4 }, (_, index) => <div key={index} className="bg-surface p-4"><Skeleton className="h-3 w-20" /><Skeleton className="mt-3 h-7 w-12" /><Skeleton className="mt-2 h-3 w-28" /></div>)
+            ) : (
+              <>
+                <SummaryTile href="/agents" label="Agents" value={String(agents.total)}
+                  detail={agents.total === 0 ? "None yet" : [`${agents.ready} ready`, agents.working ? `${agents.working} working` : null, agents.other ? `${agents.other} other` : null].filter(Boolean).join(" · ")} />
+                <SummaryTile href="/monitoring" label="Runs today" value={countLabel(runs.last24h, runs.capped)}
+                  detail={runs.last24h === 0 ? "Nothing in the last 24 hours" : `${countLabel(runs.completed24h, runs.capped)} completed in the last 24 hours`} />
+                <SummaryTile href={`/monitoring${operationsQuery({ status: "attention" })}`} label="Needs attention" value={countLabel(runs.attention24h, runs.capped)}
+                  tone={runs.attention24h ? "danger" : undefined}
+                  detail={runs.attention24h ? "Failed or interrupted runs to review" : "Nothing failed in the last 24 hours"} />
+                <SummaryTile href="/providers" label="Model providers"
+                  value={providers ? `${configured} of ${providers.length}` : options.error ? "—" : "…"}
+                  detail={options.error ? "Status unavailable" : !providers ? "Checking…" : responding ? `${responding.label} responded ${relativeTime(responding.evidence.kind === "success" ? responding.evidence.at : null, now)}` : configured ? "Configured, not yet verified by a request" : "No provider has an API key yet"} />
+              </>
+            )}
+          </section>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+            <motion.div {...reveal} className="min-w-0 lg:col-span-3">
+              <RecentActivity data={data} agentNames={agentNames} now={now} />
+            </motion.div>
+            <motion.div {...reveal} className="min-w-0 lg:col-span-2">
+              <ProvidersPanel providers={providers} unavailable={options.error !== null && options.models === null} now={now} />
+            </motion.div>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
-function formatDuration(seconds: number | null): string {
-  if (seconds === null) return "—";
-  return seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+function SummaryTile({ href, label, value, detail, tone }: { href: string; label: string; value: string; detail: string; tone?: "danger" }) {
+  return (
+    <Link href={href} className="group flex flex-col bg-surface p-4 transition-colors hover:bg-surface-2">
+      <span className="flex items-center justify-between text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5">{tone && <StatusDot tone={tone} />}{label}</span>
+        <ChevronRight aria-hidden className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
+      </span>
+      <span className={cn("mt-1.5 text-2xl font-semibold tabular-nums tracking-tight", tone ? "text-danger" : "text-foreground")}>{value}</span>
+      <span className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{detail}</span>
+    </Link>
+  );
 }
 
-function serviceStatus(status: string): ServiceStatus {
-  if (["online", "up", "healthy", "running", "active"].includes(status.toLowerCase())) return "online";
-  if (["warning", "degraded", "partial"].includes(status.toLowerCase())) return "degraded";
-  return "offline";
+function RecentActivity({ data, agentNames, now }: { data: ReturnType<typeof useMonitoring>["data"]; agentNames: Record<string, string>; now: Date }) {
+  if (data === null) {
+    return (
+      <Panel>
+        <PanelHeader title="Recent activity" />
+        <div className="flex flex-col gap-3 p-4" aria-busy="true">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-10 w-full" />)}</div>
+      </Panel>
+    );
+  }
+  if (data.agents.length === 0) return <GetStarted />;
+
+  const recent = data.executions.slice(0, RECENT);
+  return (
+    <Panel>
+      <PanelHeader title="Recent activity" description="The latest chat turns and tasks across your Agents."
+        actions={recent.length > 0 && <Link href="/monitoring" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">All runs<ArrowRight aria-hidden className="h-3 w-3" /></Link>} />
+      {recent.length === 0 ? (
+        <EmptyState icon={MessageSquare} title="No runs yet" description="Open an Agent and send it a message. Each turn shows up here." className="m-4 border-none"
+          action={<Link href="/agents" className={buttonClasses("secondary", "sm")}>Open Agents</Link>} />
+      ) : (
+        <ul className="divide-y divide-border">
+          {recent.map((execution) => (
+            <li key={execution.execution_id}>
+              <Link href={`/monitoring${operationsQuery({ execution: execution.execution_id })}`} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.025]">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-foreground">{executionLabel(execution, agentNames[execution.agent_id])}</span>
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                    <time dateTime={execution.created_at} title={new Date(execution.created_at).toLocaleString()}>{relativeTime(execution.created_at, now)}</time>
+                    {execution.status === "failed" || execution.status === "interrupted" ? " · Open to review and retry" : ""}
+                  </span>
+                </span>
+                <StatusBadge status={execution.status} className="shrink-0" />
+                <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-subtle transition-colors group-hover:text-muted-foreground" />
+                <span className="sr-only">Inspect this run</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
 }
 
-export function MonitoringDashboard() {
-  const { data, loading, error, connectionStatus, retry } = useMonitoring();
-  const runningExecutions = data?.executions.filter((execution) => ["pending", "queued", "starting", "running"].includes(execution.status)) ?? [];
-  const completed = data?.executions.filter((execution) => execution.status === "completed") ?? [];
-  const terminal = data?.executions.filter((execution) => ["completed", "failed", "cancelled"].includes(execution.status)) ?? [];
-  const durations = completed.map((execution) => execution.duration).filter((value): value is number => value !== null);
-  const averageDuration = durations.length ? durations.reduce((total, value) => total + value, 0) / durations.length : null;
-  const successRate = terminal.length ? `${Math.round((completed.length / terminal.length) * 100)}%` : "—";
-  const services = data?.services.map((service) => ({ ...service, status: serviceStatus(service.status) })) ?? [];
-
-  const overview = data ? [
-    { label: "Runtime state", value: data.runtime.state, icon: Cpu, tone: "text-primary" },
-    { label: "Heartbeat", value: data.lastHeartbeat ? new Date(data.lastHeartbeat).toLocaleTimeString() : "Awaiting", icon: HeartPulse, tone: "text-emerald-300" },
-    { label: "Version", value: data.health.version, icon: Server, tone: "text-foreground" },
-    { label: "Uptime", value: formatUptime(data.health.uptime), icon: Clock3, tone: "text-primary" },
-    { label: "WebSocket", value: connectionStatus, icon: Wifi, tone: connectionStatus === "connected" ? "text-emerald-300" : "text-amber-300" },
-  ] : [];
-  const statistics = data ? [
-    { label: "Running Agents", value: data.agents.filter((agent) => agent.status === "running").length, icon: Bot, tone: "text-emerald-300" },
-    { label: "Running Executions", value: runningExecutions.length, icon: Activity, tone: "text-amber-300" },
-    { label: "Registered Services", value: data.services.length, icon: Server, tone: "text-primary" },
-    { label: "Event Count", value: data.events.length, icon: Radio, tone: "text-foreground" },
-    { label: "Execution Count", value: data.executions.length, icon: Gauge, tone: "text-primary" },
-    { label: "Connected Clients", value: connectionStatus === "connected" ? 1 : 0, icon: Wifi, tone: "text-emerald-300" },
-    { label: "Average Duration", value: formatDuration(averageDuration), icon: Clock3, tone: "text-primary" },
-    { label: "Success Rate", value: successRate, icon: CheckCircle2, tone: "text-emerald-300" },
-  ] : [];
-
-  return <div className="flex h-screen w-full overflow-hidden"><Sidebar /><div className="flex flex-1 flex-col overflow-hidden"><Topbar /><main id="monitoring" className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8"><div className="mx-auto flex max-w-7xl flex-col gap-7">
-    {data && <RealtimeNotifications events={data.events.slice(0, 1)} />}
-    <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><div className="flex items-center gap-2"><Activity className="h-5 w-5 text-primary" /><h1 className="text-2xl font-semibold tracking-tight text-foreground">Monitoring</h1></div><p className="mt-1 text-sm text-muted-foreground">The operational control center for Genesis.</p></div><RealtimeStatus connectionStatus={connectionStatus} runtimeState={data?.runtime.state ?? "loading"} lastHeartbeat={data?.lastHeartbeat ?? null} /></header>
-    {error && data === null ? <ErrorState message={error} onRetry={() => void retry()} isRetrying={loading} /> : <>
-      {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-300"><span>{error}</span><button type="button" onClick={() => void retry()} className="rounded-md border border-red-400/25 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-400/10">Retry</button></div>}
-      <section><div className="mb-3"><h2 className="text-sm font-semibold text-foreground">Runtime Overview</h2><p className="mt-1 text-xs text-muted-foreground">Current process health and real-time connectivity.</p></div><div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">{loading ? Array.from({ length: 5 }, (_, index) => <StatusCardSkeleton key={index} />) : overview.map(({ label, value, icon: Icon, tone }) => <div key={label} className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/15"><div className="flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">{label}</span><Icon className={`h-4 w-4 ${tone}`} /></div><p className="mt-3 truncate text-lg font-semibold capitalize text-foreground" title={value}>{value}</p></div>)}</div></section>
-      <section><div className="mb-3"><h2 className="text-sm font-semibold text-foreground">System Statistics</h2><p className="mt-1 text-xs text-muted-foreground">Calculated from loaded runtime, Agent, and Execution data.</p></div><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{loading ? Array.from({ length: 8 }, (_, index) => <StatsCardSkeleton key={index} />) : statistics.map(({ label, value, icon: Icon, tone }) => <div key={label} className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/15"><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{label}</span><Icon className={`h-4 w-4 ${tone}`} /></div><p className="mt-2 text-xl font-semibold tracking-tight text-foreground">{value}</p></div>)}</div></section>
-      {loading ? <div className="grid gap-5 lg:grid-cols-2"><div className="skeleton-shimmer h-96 rounded-xl border border-border bg-surface" /><div className="skeleton-shimmer h-96 rounded-xl border border-border bg-surface" /></div> : data && <><ExecutionInspector executions={data.executions} agentNames={Object.fromEntries(data.agents.map((agent) => [agent.id, agent.name]))} onChanged={retry} /><section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]"><EventStream events={data.events} /><LiveLogViewer events={data.events} /></section><section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]"><div><div className="mb-3"><h2 className="text-sm font-semibold text-foreground">Registered Services</h2><p className="mt-1 text-xs text-muted-foreground">Hover a service for its operational description.</p></div><ServicesList services={services} /></div><HealthPanel runtimeState={data.runtime.state} websocket={connectionStatus} /></section></>}
-    </>}
-  </div></main></div></div>;
+function GetStarted() {
+  const steps = [
+    { icon: Bot, title: "Create an Agent", text: "Describe what it should do and pick a model." },
+    { icon: MessageSquare, title: "Chat with it", text: "Ask questions or give it tasks; it can use the tools you allow." },
+    { icon: BrainCircuit, title: "Teach it", text: "Save facts and preferences it should remember." },
+    { icon: Activity, title: "Follow its work", text: "Every run is recorded in Operations with its full timeline." },
+  ];
+  return (
+    <Panel>
+      <PanelHeader title="Get started" description="Your workspace is empty. Four steps to your first Agent:" />
+      <ol className="grid gap-px bg-border sm:grid-cols-2">
+        {steps.map((step, index) => (
+          <li key={step.title} className="flex gap-3 bg-surface p-4">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-xs text-muted-foreground">{index + 1}</span>
+            <span><span className="block text-sm font-medium text-foreground">{step.title}</span><span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{step.text}</span></span>
+          </li>
+        ))}
+      </ol>
+      <div className="border-t border-border p-4">
+        <Link href="/agents?create=1" className={buttonClasses("primary", "sm")}><Sparkles aria-hidden className="h-3.5 w-3.5" />Create your first Agent</Link>
+      </div>
+    </Panel>
+  );
 }
 
-export default function Home() {
-  const { data, loading, error, connectionStatus, retry } = useMonitoring();
-  const workflowSummary = useWorkflowSummary();
-  const quickStatistics = data ? [
-    { label: "Running Agents", value: data.agents.filter((agent) => agent.status === "running").length, icon: Bot, tone: "text-emerald-300" },
-    { label: "Running Executions", value: data.executions.filter((execution) => ["pending", "queued", "starting", "running"].includes(execution.status)).length, icon: Activity, tone: "text-amber-300" },
-    { label: "Registered Tools", value: data.tools.length, icon: Wrench, tone: "text-primary" },
-    { label: "Registered Services", value: data.services.length, icon: Server, tone: "text-foreground" },
-    { label: "Workflows", value: workflowSummary?.total ?? "—", detail: workflowSummary ? `${workflowSummary.running} running · ${workflowSummary.failed} failed` : "Workflow API unavailable", icon: Workflow, tone: workflowSummary?.failed ? "text-red-300" : "text-primary" },
-  ] : [];
-  const health = data ? [
-    { label: "Runtime", value: data.runtime.state, icon: Cpu, tone: "text-primary" },
-    { label: "Health", value: data.health.status, icon: HeartPulse, tone: "text-emerald-300" },
-    { label: "Uptime", value: formatUptime(data.health.uptime), icon: Clock3, tone: "text-primary" },
-    { label: "WebSocket", value: connectionStatus, icon: Wifi, tone: connectionStatus === "connected" ? "text-emerald-300" : "text-amber-300" },
-  ] : [];
-
-  return <div className="flex h-screen w-full overflow-hidden"><Sidebar /><div className="flex flex-1 flex-col overflow-hidden"><Topbar /><main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8"><div className="mx-auto flex max-w-6xl flex-col gap-7">
-    {data && <RealtimeNotifications events={data.events.slice(0, 5)} />}
-    <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><div className="flex items-center gap-2"><Cpu className="h-5 w-5 text-primary" /><h1 className="text-2xl font-semibold tracking-tight text-foreground">Genesis</h1><span className="rounded-full border border-border bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground">{data?.health.version ?? "Loading"}</span></div><p className="mt-1 text-sm text-muted-foreground">Your AI Agent Operating System — what is happening right now.</p></div><RealtimeStatus connectionStatus={connectionStatus} runtimeState={data?.runtime.state ?? "loading"} lastHeartbeat={data?.lastHeartbeat ?? null} /></header>
-    {error && data === null ? <ErrorState message={error} onRetry={() => void retry()} isRetrying={loading} /> : <>
-      {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-300"><span>{error}</span><button type="button" onClick={() => void retry()} className="rounded-md border border-red-400/25 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-400/10">Retry</button></div>}
-      <section><h2 className="mb-3 text-sm font-semibold text-foreground">Quick Health</h2><div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{loading ? Array.from({ length: 4 }, (_, index) => <StatusCardSkeleton key={index} />) : health.map(({ label, value, icon: Icon, tone }) => <div key={label} className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/15"><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{label}</span><Icon className={`h-4 w-4 ${tone}`} /></div><p className="mt-2 truncate text-xl font-semibold capitalize text-foreground">{value}</p></div>)}</div></section>
-      <section><h2 className="mb-3 text-sm font-semibold text-foreground">Quick Statistics</h2><div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{loading ? Array.from({ length: 4 }, (_, index) => <StatsCardSkeleton key={index} />) : quickStatistics.map(({ label, value, icon: Icon, tone, detail }) => <div key={label} className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/15"><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{label}</span><Icon className={`h-4 w-4 ${tone}`} /></div><p className="mt-2 text-xl font-semibold text-foreground">{value}</p>{detail && <p className="mt-1 text-[11px] text-muted-foreground">{detail}</p>}</div>)}</div></section>
-      <section className="grid gap-5 lg:grid-cols-2"><div className="rounded-xl border border-border bg-surface p-5 shadow-sm"><h2 className="text-sm font-semibold text-foreground">Recent Activity</h2><p className="mt-1 text-xs text-muted-foreground">The latest activity across Genesis.</p><div className="mt-4 divide-y divide-border">{data?.events.slice(0, 8).map((event) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-xs font-medium text-foreground">{event.event_type.replaceAll(".", " ")}</p><p className="mt-1 truncate text-xs text-muted-foreground">{event.source}</p></div><time className="shrink-0 text-[11px] text-muted-foreground">{new Date(event.timestamp).toLocaleTimeString()}</time></div>) ?? <p className="py-8 text-center text-sm text-muted-foreground">Waiting for recent activity.</p>}</div></div><div className="rounded-xl border border-border bg-surface p-5 shadow-sm"><h2 className="text-sm font-semibold text-foreground">Quick Actions</h2><p className="mt-1 text-xs text-muted-foreground">Jump straight into common Genesis workflows.</p><div className="mt-4 grid gap-2 sm:grid-cols-2"><QuickAction href="/agents" icon={Plus} label="Create Agent" /><QuickAction href="/agents" icon={Bot} label="Open Agents" /><QuickAction href="/monitoring" icon={Activity} label="Open Monitoring" /><span title="The Tools page is not enabled in the current frontend."><button type="button" disabled className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2.5 text-left text-xs font-medium text-muted-foreground opacity-55"><span className="flex items-center gap-2"><Wrench className="h-3.5 w-3.5" />Open Tools</span><ArrowUpRight className="h-3.5 w-3.5" /></button></span></div></div></section>
-    </>}
-  </div></main></div></div>;
+function ProvidersPanel({ providers, unavailable, now }: { providers: ProviderReadiness[] | null; unavailable: boolean; now: Date }) {
+  return (
+    <Panel id="model-providers" className="scroll-mt-6">
+      <PanelHeader title="Model providers" description="Which AI models your Agents can use."
+        actions={<Link href="/providers" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">Details<ArrowRight aria-hidden className="h-3 w-3" /></Link>} />
+      {unavailable ? (
+        <div className="flex items-center justify-between gap-3 p-4">
+          <p className="text-sm text-muted-foreground">Provider status couldn&apos;t be loaded.</p>
+          <StatusBadge status="unavailable" />
+        </div>
+      ) : providers === null ? (
+        <div className="flex flex-col gap-3 p-4" aria-busy="true"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
+      ) : providers.length === 0 ? (
+        <p className="p-4 text-sm text-muted-foreground">This Genesis server doesn&apos;t offer any models.</p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {providers.map((provider) => (
+            <li key={provider.provider} className="flex flex-col gap-1.5 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-foreground">{provider.label}</span>
+                <StatusBadge status={provider.state} />
+              </div>
+              <p className="truncate font-mono text-[11px] text-muted-foreground" title={provider.models.join(", ")}>{provider.models.join(", ")}</p>
+              <p className="text-xs leading-5 text-muted-foreground">{evidenceText(provider, now)}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="border-t border-border px-4 py-3 text-[11px] leading-4 text-muted-foreground">
+        &ldquo;Configured&rdquo; means an API key is set on the server; it doesn&apos;t prove requests succeed. Outcomes come from model calls since the backend last started.
+      </p>
+    </Panel>
+  );
 }
 
-function QuickAction({ href, icon: Icon, label }: { href: string; icon: typeof Activity; label: string }) { return <Link href={href} className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-xs font-medium text-foreground transition-all hover:-translate-y-0.5 hover:bg-white/[0.05]"><span className="flex items-center gap-2"><Icon className="h-3.5 w-3.5 text-primary" />{label}</span><ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground" /></Link>; }
+function evidenceText(provider: ProviderReadiness, now: Date): string {
+  if (!provider.configured) return `Add an API key for ${provider.label} on the server to use these models.`;
+  const { evidence } = provider;
+  if (evidence.kind === "success") return `Last response ${relativeTime(evidence.at, now)}${evidence.model ? ` from ${evidence.model}` : ""}.`;
+  if (evidence.kind === "failure") return `Last request failed ${relativeTime(evidence.at, now)}. ${evidence.reason}`;
+  return "Not verified yet: no requests since the backend started.";
+}

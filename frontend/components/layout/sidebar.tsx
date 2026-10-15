@@ -1,132 +1,110 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { motion } from "framer-motion";
-import {
-  LayoutDashboard,
-  Cpu,
-  Wrench,
-  Puzzle,
-  BrainCircuit,
-  Workflow,
-  Bot,
-  Activity,
-  Settings,
-  ChevronLeft,
-  ChevronRight,
-} from "lucide-react";
+import { Activity, Bot, BrainCircuit, Cpu, LayoutGrid, PanelLeftClose, PanelLeftOpen, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { GenesisMark } from "@/components/brand/genesis-mark";
+import { IconButton } from "@/components/ui/button";
+import { NAVIGATION, isActivePath, type NavIconName } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
-interface NavItem {
-  label: string;
-  icon: React.ElementType;
-  href?: string;
-}
+const ICONS: Record<NavIconName, LucideIcon> = {
+  overview: LayoutGrid,
+  agents: Bot,
+  memory: BrainCircuit,
+  workflows: Workflow,
+  operations: Activity,
+  tools: Wrench,
+  providers: Cpu,
+};
 
-const navItems: NavItem[] = [
-  { label: "Dashboard", icon: LayoutDashboard, href: "/" },
-  { label: "Core", icon: Cpu },
-  { label: "Tools", icon: Wrench, href: "/tools" },
-  { label: "Plugins", icon: Puzzle },
-  { label: "Memory", icon: BrainCircuit, href: "/memory" },
-  { label: "Workflows", icon: Workflow, href: "/workflows" },
-  { label: "Agents", icon: Bot, href: "/agents" },
-  { label: "Monitoring", icon: Activity, href: "/monitoring" },
-  { label: "Settings", icon: Settings },
-];
+/*
+ * Collapsed appearance comes from the `sidebar-collapsed:` CSS variant (see globals.css), which
+ * applies only inside #app-sidebar and is correct from the first paint. The `collapsed` prop is
+ * used only for non-visual details such as tooltips and the toggle's accessible name.
+ */
 
-const NARROW_QUERY = "(max-width: 767px)";
-
-function subscribeToNarrow(onChange: () => void): () => void {
-  const query = window.matchMedia(NARROW_QUERY);
-  query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
-}
-
-/** Collapse to icons on phones unless the user has toggled the sidebar themselves. */
-function useIsNarrow(): boolean {
-  return useSyncExternalStore(subscribeToNarrow, () => window.matchMedia(NARROW_QUERY).matches, () => false);
-}
-
-export function Sidebar() {
-  const isNarrow = useIsNarrow();
-  const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null);
-  const collapsed = userCollapsed ?? isNarrow;
+/** The navigation list; shared by the desktop sidebar and the mobile drawer. */
+export function SidebarNav({ collapsed = false, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
-
   return (
-    <motion.aside
-      animate={{ width: collapsed ? 72 : 240 }}
-      transition={{ duration: 0.2, ease: "easeInOut" }}
-      className="relative flex h-screen shrink-0 flex-col border-r border-border bg-surface"
-    >
-      <div className="flex h-16 items-center justify-between px-4">
-        {!collapsed && (
-          <span className="text-sm font-semibold tracking-tight text-foreground">
-            Genesis
-          </span>
-        )}
-        <button
-          onClick={() => setUserCollapsed(!collapsed)}
-          className="ml-auto flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {collapsed ? (
-            <ChevronRight className="h-4 w-4" />
-          ) : (
-            <ChevronLeft className="h-4 w-4" />
+    <nav aria-label="Main" className="flex flex-1 flex-col gap-5 overflow-y-auto px-2 py-3">
+      {NAVIGATION.map((group, index) => (
+        <div key={group.label ?? index} role="group" aria-label={group.label ?? undefined}>
+          {group.label && (
+            <>
+              <p aria-hidden className="mb-1.5 px-3 text-[11px] font-medium uppercase tracking-wider text-subtle sidebar-collapsed:hidden">{group.label}</p>
+              <div aria-hidden className="mx-3 mb-2 hidden border-t border-border sidebar-collapsed:block" />
+            </>
           )}
-        </button>
-      </div>
+          <ul className="flex flex-col gap-0.5">
+            {group.items.map((item) => {
+              const Icon = ICONS[item.icon];
+              const active = isActivePath(item.href, pathname);
+              return (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    onClick={onNavigate}
+                    aria-current={active ? "page" : undefined}
+                    title={collapsed ? item.label : undefined}
+                    className={cn(
+                      "group relative flex h-9 items-center gap-3 rounded-md px-3 text-sm transition-colors duration-150 sidebar-collapsed:justify-center sidebar-collapsed:px-0",
+                      active ? "bg-white/[0.06] text-foreground" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground",
+                    )}
+                  >
+                    {active && <span aria-hidden className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-accent" />}
+                    <Icon aria-hidden className={cn("h-4 w-4 shrink-0", active ? "text-accent" : "text-muted-foreground group-hover:text-foreground")} />
+                    <span className="truncate sidebar-collapsed:sr-only">{item.label}</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </nav>
+  );
+}
 
-      <nav className="flex flex-1 flex-col gap-1 px-2 py-2">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const active = item.href === pathname;
-          const className = cn(
-            "group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-            active
-              ? "bg-white/5 text-foreground"
-              : item.href
-                ? "text-muted-foreground hover:bg-white/[0.07] hover:text-foreground"
-                : "cursor-not-allowed text-muted-foreground/60"
-          );
-          const content = <>
-            <Icon
-              className={cn(
-                "h-4 w-4 shrink-0",
-                active || item.href ? "text-primary" : "text-muted-foreground/60"
-              )}
-            />
-            {!collapsed && <span className="truncate">{item.label}</span>}
-          </>;
-          return item.href ? (
-            <Link
-              key={item.label}
-              href={item.href}
-              className={className}
-              title={collapsed ? item.label : undefined}
-              aria-label={collapsed ? item.label : undefined}
-            >
-              {content}
-            </Link>
-          ) : (
-            <button key={item.label} disabled className={className} title={collapsed ? item.label : undefined}>
-              {content}
-            </button>
-          );
-        })}
-      </nav>
+export function Brand() {
+  return (
+    <Link href="/" aria-label="Genesis overview" className="flex min-w-0 items-center gap-2.5 rounded-md sidebar-collapsed:justify-center">
+      <GenesisMark className="h-7 w-7 shrink-0" />
+      <span className="min-w-0 leading-tight sidebar-collapsed:hidden">
+        <span className="block text-sm font-semibold tracking-tight text-foreground">Genesis</span>
+        <span className="block text-[11px] text-muted-foreground">Agent OS</span>
+      </span>
+    </Link>
+  );
+}
 
-      <div className="border-t border-border px-4 py-3">
-        {!collapsed && (
-          <p className="text-xs text-muted-foreground/60">
-            Genesis Runtime
-          </p>
-        )}
+/**
+ * Desktop sidebar (md and up). The width transition is enabled only after the user toggles,
+ * so loading a page never animates, and the global reduced-motion rule shortens it to nothing.
+ */
+export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const [animate, setAnimate] = useState(false);
+  return (
+    <aside
+      id="app-sidebar"
+      aria-label="Sidebar"
+      className={cn(
+        "hidden h-full w-60 shrink-0 flex-col border-r border-border bg-surface md:flex sidebar-collapsed:w-[4.5rem]",
+        animate && "transition-[width] duration-200 ease-standard",
+      )}
+    >
+      <div className="flex h-14 shrink-0 items-center border-b border-border px-4 sidebar-collapsed:justify-center sidebar-collapsed:px-2">
+        <Brand />
       </div>
-    </motion.aside>
+      <SidebarNav collapsed={collapsed} />
+      <div className="flex shrink-0 items-center justify-end border-t border-border p-2 sidebar-collapsed:justify-center">
+        <IconButton label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} aria-controls="app-sidebar" onClick={() => { setAnimate(true); onToggle(); }}>
+          <PanelLeftClose aria-hidden className="h-4 w-4 sidebar-collapsed:hidden" />
+          <PanelLeftOpen aria-hidden className="hidden h-4 w-4 sidebar-collapsed:block" />
+        </IconButton>
+      </div>
+    </aside>
   );
 }

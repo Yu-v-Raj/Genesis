@@ -17,7 +17,8 @@ test("retry controls follow the server's decision exactly", () => {
 });
 
 test("statuses read as plain language and interruption is called out", () => {
-  assert.equal(statusText("completed"), "Succeeded");
+  assert.equal(statusText("completed"), "Completed");
+  assert.equal(statusText("failed"), "Failed");
   assert.match(statusText("interrupted"), /needs a decision/);
   assert.equal(isActive("running"), true);
   assert.equal(isActive("interrupted"), false);

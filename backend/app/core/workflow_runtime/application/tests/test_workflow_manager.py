@@ -3,7 +3,11 @@ import asyncio
 import pytest
 
 from backend.app.core.core_services.event_bus import EventBus
+from backend.app.core.tool_runtime.application.tool_executor import ToolExecutor
+from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
+from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
 from backend.app.core.tool_runtime.domain.task import TaskStatus
+from backend.app.core.tool_runtime.domain.tool import builtin_tools
 from backend.app.core.workflow_runtime.application.workflow_manager import WorkflowManager
 from backend.app.core.workflow_runtime.domain.exceptions import WorkflowValidationError
 from backend.app.core.workflow_runtime.domain.models import WorkflowStatus, WorkflowTask, WorkflowTaskStatus
@@ -49,3 +53,34 @@ async def test_invalid_graph_is_rejected_before_storage() -> None:
         await manager.create(name="cycle", tasks=(task("a", ("b",)), task("b", ("a",))))
     with pytest.raises(WorkflowValidationError, match="missing"):
         await manager.create(name="missing", tasks=(task("a", ("nope",)),))
+
+
+@pytest.mark.asyncio
+async def test_cancel_marks_the_running_tool_task_terminal() -> None:
+    bus = EventBus()
+    registry = ToolRegistry(bus)
+    tools = ToolRuntimeManager(registry, ToolExecutor(registry, bus), bus)
+    for tool in builtin_tools():
+        await tools.register(tool)
+    manager = WorkflowManager(tools, bus)
+    step = WorkflowTask(task_id="wait", name="wait", configuration={"tool_name": "delay", "tool_arguments": {"seconds": 3}})
+    workflow = await manager.create(name="cancel-delay", tasks=(step,))
+    await manager.start(workflow.workflow_id)
+    for _ in range(200):
+        if tools.history() and tools.history()[0].status is TaskStatus.RUNNING:
+            break
+        await asyncio.sleep(0.01)
+    assert tools.history()[0].status is TaskStatus.RUNNING
+
+    cancelled = await manager.cancel(workflow.workflow_id)
+    for _ in range(200):
+        if tools.history()[0].status is not TaskStatus.RUNNING:
+            break
+        await asyncio.sleep(0.01)
+
+    assert cancelled.tasks[0].status is WorkflowTaskStatus.CANCELLED
+    (tool_task,) = tools.history()
+    assert tool_task.status is TaskStatus.FAILED
+    assert tool_task.finished_at is not None
+    assert tool_task.result is not None and tool_task.result.metadata["cancelled"] is True
+    await manager.shutdown()

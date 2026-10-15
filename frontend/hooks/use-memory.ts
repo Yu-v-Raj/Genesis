@@ -1,162 +1,143 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RealtimeState } from "@/hooks/use-realtime";
 import { MemoryApiError, MemoryService } from "@/services/memory.service";
 import type { CreateMemoryInput, MemoryRecord, UpdateMemoryInput } from "@/types/memory";
-import type { RealtimeEvent } from "@/types/realtime";
 
-const MEMORY_EVENTS = new Set(["memory.created", "memory.updated", "memory.deleted", "memory.retrieved"]);
+const CHANGE_EVENTS = new Set(["memory.created", "memory.updated", "memory.deleted"]);
 
 const newestFirst = (memories: MemoryRecord[]) =>
   [...memories].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-
-function eventId(event: RealtimeEvent, key: "memory_id" | "agent_id"): string | null {
-  const value = event.payload[key];
-  return typeof value === "string" ? value : null;
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof MemoryApiError ? error.message : "The Memory Runtime request could not be completed.";
 }
 
-export interface MemoryState {
-  memories: MemoryRecord[];
-  loading: boolean;
-  searching: boolean;
-  error: string | null;
-  pendingMemoryIds: ReadonlySet<string>;
-  create: (agentId: string, input: CreateMemoryInput) => Promise<MemoryRecord | null>;
-  update: (memoryId: string, input: UpdateMemoryInput) => Promise<MemoryRecord | null>;
-  remove: (memoryId: string) => Promise<boolean>;
-  search: (agentId: string, query: string) => Promise<void>;
-  load: (agentId: string) => Promise<void>;
+/** Which Agent and search the loaded records answer. */
+export interface MemoryView {
+  agentId: string;
+  query: string;
 }
 
-/** Synchronizes scoped Memory Runtime snapshots with the existing real-time stream. */
-export function useMemory(selectedAgentId: string | null, realtime: RealtimeState): MemoryState {
-  const [memories, setMemories] = useState<MemoryRecord[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pendingMemoryIds, setPendingMemoryIds] = useState<Set<string>>(new Set());
+export type MutationResult = { record: MemoryRecord; error: null } | { record: null; error: string };
 
-  const load = useCallback(async (agentId: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await MemoryService.listForAgent(agentId);
-      setMemories(newestFirst(result.memories));
-    } catch (caughtError) {
-      setError(errorMessage(caughtError));
-      setMemories([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+export interface MemoryState {
+  /** Records for `view`; empty until a request has succeeded. */
+  records: MemoryRecord[];
+  /** What `records` belongs to, or `null` before the first successful load. */
+  view: MemoryView | null;
+  loading: boolean;
+  /** The latest list/search failure for the requested Agent and query. */
+  error: string | null;
+  pendingIds: ReadonlySet<string>;
+  create: (agentId: string, input: CreateMemoryInput) => Promise<MutationResult>;
+  update: (memoryId: string, input: UpdateMemoryInput) => Promise<MutationResult>;
+  remove: (memoryId: string) => Promise<{ ok: boolean; error: string | null }>;
+  reload: () => void;
+}
+
+/**
+ * One Agent's memories (optionally narrowed by the server's text search), kept current
+ * with realtime events. Responses for a previous Agent or query are discarded, so records
+ * can never appear under the wrong Agent while switching.
+ */
+export function useMemory(agentId: string | null, query: string, realtime: RealtimeState): MemoryState {
+  const [records, setRecords] = useState<MemoryRecord[]>([]);
+  const [view, setView] = useState<MemoryView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const [reloadToken, setReloadToken] = useState(0);
+  const requestSeq = useRef(0);
+  const trimmed = query.trim();
 
   useEffect(() => {
+    const seq = ++requestSeq.current;
     queueMicrotask(() => {
-      if (selectedAgentId === null) {
-        setMemories([]);
+      if (seq !== requestSeq.current) return;
+      if (agentId === null) {
+        setRecords([]);
+        setView(null);
         setError(null);
         setLoading(false);
         return;
       }
-      void load(selectedAgentId);
+      setLoading(true);
+      setError(null);
+      (trimmed ? MemoryService.search(agentId, trimmed) : MemoryService.listForAgent(agentId))
+        .then((result) => {
+          if (seq !== requestSeq.current) return;
+          setRecords(newestFirst(result.memories.filter((memory) => memory.agent_id === agentId)));
+          setView({ agentId, query: trimmed });
+        })
+        .catch((cause) => {
+          if (seq !== requestSeq.current) return;
+          setError(errorMessage(cause));
+        })
+        .finally(() => {
+          if (seq === requestSeq.current) setLoading(false);
+        });
     });
-  }, [load, selectedAgentId]);
+  }, [agentId, trimmed, reloadToken]);
 
+  const reload = useCallback(() => setReloadToken((value) => value + 1), []);
+
+  // Changes made elsewhere (another tab, or the API) arrive as events; re-run the current
+  // list or search so filtering stays the server's. Retrieval events change nothing.
   useEffect(() => {
     const event = realtime.latestEvent;
-    if (event === null || !MEMORY_EVENTS.has(event.event_type)) return;
-    const agentId = eventId(event, "agent_id");
-    const memoryId = eventId(event, "memory_id");
-    if (agentId !== selectedAgentId || memoryId === null) return;
+    if (event === null || !CHANGE_EVENTS.has(event.event_type)) return;
+    if (event.payload.agent_id !== agentId) return;
+    queueMicrotask(reload);
+  }, [realtime.latestEvent, agentId, reload]);
 
-    // GET /api/memory/{id} emits memory.retrieved. Fetching again for that
-    // informational event would publish another retrieval event indefinitely.
-    // It carries no changed record data, so the current local snapshot is valid.
-    if (event.event_type === "memory.retrieved") return;
+  const track = useCallback((memoryId: string, busy: boolean) => {
+    setPendingIds((current) => {
+      const next = new Set(current);
+      if (busy) next.add(memoryId); else next.delete(memoryId);
+      return next;
+    });
+  }, []);
 
-    if (event.event_type === "memory.deleted") {
-      queueMicrotask(() => setMemories((current) => current.filter((memory) => memory.memory_id !== memoryId)));
-      return;
-    }
-    void MemoryService.get(memoryId)
-      .then((record) => setMemories((current) => newestFirst([
-        record,
-        ...current.filter((memory) => memory.memory_id !== record.memory_id),
-      ])))
-      .catch(() => undefined);
-  }, [realtime.latestEvent, selectedAgentId]);
-
-  const create = useCallback(async (agentId: string, input: CreateMemoryInput) => {
-    setError(null);
+  const create = useCallback(async (targetAgentId: string, input: CreateMemoryInput): Promise<MutationResult> => {
     try {
-      const record = await MemoryService.create(agentId, input);
-      if (agentId === selectedAgentId) {
-        setMemories((current) => newestFirst([record, ...current]));
-      }
-      return record;
-    } catch (caughtError) {
-      setError(errorMessage(caughtError));
-      return null;
+      const record = await MemoryService.create(targetAgentId, input);
+      reload();
+      return { record, error: null };
+    } catch (cause) {
+      return { record: null, error: errorMessage(cause) };
     }
-  }, [selectedAgentId]);
+  }, [reload]);
 
-  const update = useCallback(async (memoryId: string, input: UpdateMemoryInput) => {
-    setPendingMemoryIds((current) => new Set(current).add(memoryId));
-    setError(null);
+  const update = useCallback(async (memoryId: string, input: UpdateMemoryInput): Promise<MutationResult> => {
+    track(memoryId, true);
     try {
       const record = await MemoryService.update(memoryId, input);
-      setMemories((current) => newestFirst(current.map((memory) => memory.memory_id === memoryId ? record : memory)));
-      return record;
-    } catch (caughtError) {
-      setError(errorMessage(caughtError));
-      return null;
+      setRecords((current) => current.map((memory) => (memory.memory_id === memoryId ? record : memory)));
+      reload();
+      return { record, error: null };
+    } catch (cause) {
+      return { record: null, error: errorMessage(cause) };
     } finally {
-      setPendingMemoryIds((current) => {
-        const next = new Set(current);
-        next.delete(memoryId);
-        return next;
-      });
+      track(memoryId, false);
     }
-  }, []);
+  }, [reload, track]);
 
   const remove = useCallback(async (memoryId: string) => {
-    setPendingMemoryIds((current) => new Set(current).add(memoryId));
-    setError(null);
+    track(memoryId, true);
     try {
       await MemoryService.delete(memoryId);
-      setMemories((current) => current.filter((memory) => memory.memory_id !== memoryId));
-      return true;
-    } catch (caughtError) {
-      setError(errorMessage(caughtError));
-      return false;
+      setRecords((current) => current.filter((memory) => memory.memory_id !== memoryId));
+      reload();
+      return { ok: true, error: null };
+    } catch (cause) {
+      return { ok: false, error: errorMessage(cause) };
     } finally {
-      setPendingMemoryIds((current) => {
-        const next = new Set(current);
-        next.delete(memoryId);
-        return next;
-      });
+      track(memoryId, false);
     }
-  }, []);
+  }, [reload, track]);
 
-  const search = useCallback(async (agentId: string, query: string) => {
-    setSearching(true);
-    setError(null);
-    try {
-      const result = await MemoryService.search(agentId, query);
-      setMemories(newestFirst(result.memories));
-    } catch (caughtError) {
-      setError(errorMessage(caughtError));
-      setMemories([]);
-    } finally {
-      setSearching(false);
-    }
-  }, []);
-
-  return { memories, loading, searching, error, pendingMemoryIds: useMemo(() => pendingMemoryIds, [pendingMemoryIds]), create, update, remove, search, load };
+  return { records, view, loading, error, pendingIds, create, update, remove, reload };
 }

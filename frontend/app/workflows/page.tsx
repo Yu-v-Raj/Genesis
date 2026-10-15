@@ -1,58 +1,331 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Activity, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, FilePlus2, ListChecks, LoaderCircle, Pause, Play, RefreshCw, Search, Square, Trash2, Workflow as WorkflowIcon, X, XCircle } from "lucide-react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Plus, Search, Workflow as WorkflowIcon, X } from "lucide-react";
+
 import { RealtimeNotifications } from "@/components/dashboard/realtime-notifications";
-import { RealtimeStatus } from "@/components/dashboard/realtime-status";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Topbar } from "@/components/layout/topbar";
+import { DefinitionView } from "@/components/workflows/definition-view";
+import { RunView, type RunRequest } from "@/components/workflows/run-view";
+import { WorkflowBuilder } from "@/components/workflows/workflow-builder";
+import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
+import { Alert, EmptyState, Skeleton } from "@/components/ui/feedback";
+import { Input, Select } from "@/components/ui/field";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { Tabs, tabPanelProps, type TabItem } from "@/components/ui/tabs";
+import { useNow } from "@/hooks/use-now";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkflows } from "@/hooks/use-workflows";
-import { RetryControl } from "@/components/durable/retry-control";
-import { DefinitionLibrary } from "@/components/workflows/definition-library";
-import { WorkflowApiError, WorkflowService } from "@/services/workflow.service";
+import { relativeTime } from "@/lib/operations";
+import { toolLabel } from "@/lib/tools";
 import { cn } from "@/lib/utils";
-import type { Workflow, WorkflowStatus, WorkflowTask, WorkflowTaskCreateInput, WorkflowTaskStatus } from "@/types/workflows";
+import { RUN_FILTERS, filterDefinitions, filterRuns, runProgress, runsOf, toolsUsed, type RunFilter } from "@/lib/workflows";
+import { ToolService } from "@/services/tool.service";
+import type { ToolDefinition } from "@/types/tools";
+import type { StoredWorkflowDefinition, Workflow } from "@/types/workflows";
 
-const workflowStatuses: WorkflowStatus[] = ["created", "queued", "running", "paused", "completed", "failed", "interrupted", "cancelled"];
-const activeStatuses = new Set<WorkflowStatus>(["queued", "running", "paused"]);
-const formatTime = (value: string | null) => value ? new Date(value).toLocaleString() : "—";
-const duration = (workflow: Workflow) => { const end = workflow.tasks.map((task) => task.finished_at).filter((value): value is string => value !== null).sort().at(-1); if (!end) return "—"; const milliseconds = Date.parse(end) - Date.parse(workflow.created_at); return milliseconds < 60_000 ? `${Math.max(0, Math.round(milliseconds / 1000))}s` : `${Math.floor(milliseconds / 60_000)}m ${Math.round((milliseconds % 60_000) / 1000)}s`; };
-const taskCounts = (workflow: Workflow) => ({ completed: workflow.tasks.filter((task) => task.status === "completed").length, failed: workflow.tasks.filter((task) => task.status === "failed").length, active: workflow.tasks.filter((task) => ["ready", "running"].includes(task.status)).length });
-const statusTone: Record<WorkflowStatus | WorkflowTaskStatus, string> = { created: "border-slate-400/25 bg-slate-400/10 text-slate-200", queued: "border-sky-400/25 bg-sky-400/10 text-sky-200", pending: "border-slate-400/25 bg-slate-400/10 text-slate-200", ready: "border-sky-400/25 bg-sky-400/10 text-sky-200", running: "border-amber-400/25 bg-amber-400/10 text-amber-200", paused: "border-violet-400/25 bg-violet-400/10 text-violet-200", completed: "border-emerald-400/25 bg-emerald-400/10 text-emerald-200", failed: "border-red-400/25 bg-red-400/10 text-red-200", blocked: "border-red-400/25 bg-red-400/10 text-red-200", cancelled: "border-orange-400/25 bg-orange-400/10 text-orange-200", interrupted: "border-amber-300/40 bg-amber-300/10 text-amber-100" };
+type Tab = "workflows" | "runs";
+const TAB_PREFIX = "workflows";
 
-function StatusBadge({ status }: { status: WorkflowStatus | WorkflowTaskStatus }) { return <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold capitalize", statusTone[status])}>{status === "running" && <LoaderCircle className="h-3 w-3 animate-spin" />}{status}</span>; }
-function Detail({ label, value }: { label: string; value: string | number }) { return <div><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 break-words text-foreground">{value}</dd></div>; }
-function Progress({ workflow }: { workflow: Workflow }) { const counts = taskCounts(workflow); const total = workflow.tasks.length; const complete = counts.completed + counts.failed; const percentage = total ? Math.round((complete / total) * 100) : 0; return <div className="min-w-40"><div className="flex justify-between text-[11px] text-muted-foreground"><span>Task progress</span><span>{complete} / {total}</span></div><div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/[0.07]"><div className={cn("h-full rounded-full transition-[width] duration-300", counts.failed ? "bg-red-400" : "bg-primary")} style={{ width: `${percentage}%` }} /></div></div>; }
-function MetricCard({ label, value, icon: Icon, tone }: { label: string; value: number; icon: typeof WorkflowIcon; tone: string }) { return <div className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-white/15 hover:shadow-lg hover:shadow-black/15"><div className="flex items-center justify-between"><span className="text-xs font-medium capitalize text-muted-foreground">{label}</span><span className={cn("flex h-8 w-8 items-center justify-center rounded-lg border border-current/15 bg-current/10", tone)}><Icon className="h-4 w-4" /></span></div><p className="mt-3 text-2xl font-semibold tracking-tight text-foreground">{value}</p></div>; }
-
-type DraftTask = { task_id: string; name: string; tool_name: string; argumentsText: string; dependenciesText: string };
-function validJsonObject(value: string): string | null { try { const parsed: unknown = JSON.parse(value || "{}"); return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? null : "Tool arguments must be a JSON object."; } catch { return "Enter valid JSON, for example {\"message\": \"Hello\"}."; } }
-function Field({ label, value, onChange, placeholder, helper, required = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; helper?: string; required?: boolean }) { return <label className="mt-3 block text-xs font-medium text-foreground">{label}{required && <span className="text-red-300"> *</span>}<input required={required} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-1.5 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-primary" />{helper && <span className="mt-1 block font-normal text-muted-foreground">{helper}</span>}</label>; }
-function CreateWorkflow({ onCreate, pending }: { onCreate: (input: { name: string; description: string; metadata: Record<string, unknown>; tasks: WorkflowTaskCreateInput[] }) => Promise<boolean>; pending: boolean }) {
-  const initial = (): DraftTask => ({ task_id: "task-1", name: "First task", tool_name: "echo", argumentsText: '{\n  "message": "Hello Genesis"\n}', dependenciesText: "" });
-  const [open, setOpen] = useState(false); const [name, setName] = useState(""); const [description, setDescription] = useState(""); const [tasks, setTasks] = useState<DraftTask[]>([initial()]); const [error, setError] = useState<string | null>(null); const [creating, setCreating] = useState(false);
-  const jsonErrors = tasks.map((task) => validJsonObject(task.argumentsText)); const hasInvalidJson = jsonErrors.some(Boolean); const update = (index: number, changes: Partial<DraftTask>) => setTasks((current) => current.map((task, taskIndex) => taskIndex === index ? { ...task, ...changes } : task)); const reset = () => { setName(""); setDescription(""); setTasks([initial()]); setError(null); };
-  const submit = async (event: FormEvent) => { event.preventDefault(); setError(null); if (!name.trim()) { setError("Give this workflow a name."); return; } if (hasInvalidJson) { setError("Fix the highlighted JSON arguments before creating the workflow."); return; } const inputTasks = tasks.map((task) => ({ task_id: task.task_id.trim(), name: task.name.trim(), action: "tool" as const, tool_name: task.tool_name.trim(), tool_arguments: JSON.parse(task.argumentsText || "{}") as Record<string, unknown>, dependencies: task.dependenciesText.split(",").map((item) => item.trim()).filter(Boolean) })); if (inputTasks.some((task) => !task.task_id || !task.name || !task.tool_name)) { setError("Every task needs an ID, name, and tool."); return; } if (new Set(inputTasks.map((task) => task.task_id)).size !== inputTasks.length) { setError("Task IDs must be unique."); return; } setCreating(true); try { if (await onCreate({ name: name.trim(), description: description.trim(), metadata: {}, tasks: inputTasks })) { reset(); setOpen(false); } } finally { setCreating(false); } };
-  const submitting = pending || creating;
-  return <><button type="button" onClick={() => setOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-primary/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"><FilePlus2 className="h-4 w-4" />Create workflow</button><AnimatePresence>{open && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="create-workflow-title"><motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }} className="max-h-[calc(100vh-2rem)] w-full max-w-3xl overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-2xl sm:p-6"><div className="flex items-start justify-between gap-4"><div><h2 id="create-workflow-title" className="text-lg font-semibold text-foreground">Create workflow</h2><p className="mt-1 text-sm text-muted-foreground">Add tasks in order. Enter an earlier task ID as a dependency for a later task.</p></div><button type="button" disabled={submitting} onClick={() => { reset(); setOpen(false); }} className="rounded-md p-2 text-muted-foreground hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" aria-label="Close create workflow dialog"><X className="h-4 w-4" /></button></div><form onSubmit={(event) => void submit(event)} className="mt-6 space-y-5"><section className="grid gap-4 sm:grid-cols-2"><Field label="Workflow name" required value={name} onChange={setName} placeholder="Daily report" /><Field label="Description" value={description} onChange={setDescription} placeholder="Optional operational context" /></section><section><div className="flex items-end justify-between gap-3"><div><h3 className="text-sm font-semibold text-foreground">Tasks</h3><p className="mt-1 text-xs text-muted-foreground">Each task invokes an existing Tool Runtime tool.</p></div><button type="button" disabled={submitting} onClick={() => setTasks((current) => [...current, { task_id: `task-${current.length + 1}`, name: `Task ${current.length + 1}`, tool_name: "echo", argumentsText: "{}", dependenciesText: current.length ? current[current.length - 1].task_id : "" }])} className="text-xs font-semibold text-primary hover:text-primary/80 disabled:opacity-45">+ Add task</button></div><div className="mt-3 space-y-3">{tasks.map((task, index) => <fieldset key={`${task.task_id}-${index}`} disabled={submitting} className="rounded-xl border border-border bg-background/30 p-4"><div className="mb-4 flex items-center justify-between"><legend className="flex items-center gap-2 text-sm font-semibold text-foreground"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">{index + 1}</span>{task.name || `Task ${index + 1}`}</legend>{tasks.length > 1 && <button type="button" onClick={() => setTasks((current) => current.filter((_, taskIndex) => taskIndex !== index))} className="rounded-md px-2 py-1 text-xs font-medium text-red-300 hover:bg-red-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300">Remove</button>}</div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><Field label="Task ID" required value={task.task_id} onChange={(value) => update(index, { task_id: value })} helper="Used by dependencies." /><Field label="Task name" required value={task.name} onChange={(value) => update(index, { name: value })} /><Field label="Tool name" required value={task.tool_name} onChange={(value) => update(index, { tool_name: value })} helper="For example: echo." /></div><Field label="Depends on task IDs" value={task.dependenciesText} onChange={(value) => update(index, { dependenciesText: value })} placeholder={index ? "task-1" : "None for the first task"} helper="Comma-separate IDs. Task B → task-a means B waits for A." /><label className="mt-3 block text-xs font-medium text-foreground">Tool arguments <span className="font-normal text-muted-foreground">(JSON object)</span><textarea value={task.argumentsText} onChange={(event) => update(index, { argumentsText: event.target.value })} rows={4} spellCheck={false} aria-invalid={Boolean(jsonErrors[index])} aria-describedby={`arguments-help-${index}`} className={cn("mt-1.5 w-full rounded-md border bg-surface px-3 py-2.5 font-mono text-xs leading-5 text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary", jsonErrors[index] ? "border-red-400/60" : "border-border")} /></label><p id={`arguments-help-${index}`} className={cn("mt-1 text-xs", jsonErrors[index] ? "text-red-300" : "text-muted-foreground")}>{jsonErrors[index] ?? "Must be a JSON object. This payload is passed unchanged to the selected tool."}</p></fieldset>)}</div></section>{error && <p role="alert" className="rounded-lg border border-red-400/25 bg-red-400/5 p-3 text-sm text-red-200">{error}</p>}<div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" disabled={submitting} onClick={() => { reset(); setOpen(false); }} className="h-9 rounded-md border border-border px-3 text-xs font-medium text-muted-foreground hover:bg-white/5 disabled:opacity-45">Cancel</button><button disabled={submitting || hasInvalidJson} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-3.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45">{submitting && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}{submitting ? "Creating…" : "Create workflow"}</button></div></form></motion.div></motion.div>}</AnimatePresence></>;
-}
-
-function Disclosure({ label, value }: { label: string; value: unknown }) { const [open, setOpen] = useState(false); const [copied, setCopied] = useState(false); const json = JSON.stringify(value, null, 2); const copy = async () => { await navigator.clipboard.writeText(json); setCopied(true); window.setTimeout(() => setCopied(false), 1500); }; return <div className="mt-3 rounded-lg border border-border"><button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-foreground hover:bg-white/[0.03]"><span>{label}</span><ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} /></button>{open && <div className="border-t border-border p-3"><button type="button" onClick={() => void copy()} className="mb-2 inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-white/5"><Copy className="h-3 w-3" />{copied ? "Copied" : "Copy JSON"}</button><pre className="max-h-52 overflow-auto rounded-md bg-background p-3 font-mono text-[11px] leading-5 text-slate-200">{json}</pre></div>}</div>; }
-function TaskList({ tasks }: { tasks: WorkflowTask[] }) { const [expanded, setExpanded] = useState<string | null>(null); const byId = new Map(tasks.map((task) => [task.task_id, task])); return <div className="space-y-2">{tasks.map((task, index) => { const open = expanded === task.task_id; return <div key={task.task_id} className="rounded-lg border border-border bg-white/[0.02]"><button type="button" onClick={() => setExpanded(open ? null : task.task_id)} aria-expanded={open} className="flex w-full items-center gap-3 p-3 text-left hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-primary/20 bg-primary/10 text-[11px] font-semibold text-primary">{index + 1}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{task.name}</span><span className="block truncate font-mono text-[11px] text-muted-foreground">{task.task_id} · {task.configuration.tool_name}</span></span><StatusBadge status={task.status} /><ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} /></button>{open && <div className="border-t border-border px-3 pb-3 pt-3 text-xs"><dl className="grid gap-3 sm:grid-cols-2"><Detail label="Tool" value={task.configuration.tool_name} /><Detail label="Dependencies" value={task.dependencies.length ? task.dependencies.map((id) => byId.get(id)?.name ?? id).join(" → ") : "No dependencies"} /><Detail label="Started" value={formatTime(task.started_at)} /><Detail label="Finished" value={formatTime(task.finished_at)} /></dl>{task.error && <p className="mt-3 rounded-md border border-red-400/25 bg-red-400/5 p-2.5 text-red-200">{task.error}</p>}{task.result !== null && <Disclosure label="Task result" value={task.result} />}</div>}</div>; })}</div>; }
-function WorkflowDetails({ workflow, tasks, history, loading, onRetry }: { workflow: Workflow | null; tasks: WorkflowTask[]; history: { id: string; task_name: string; task_id: string; status: WorkflowTaskStatus; timestamp: string; result: unknown | null; error: string | null }[]; loading: boolean; onRetry: (workflowId: string, acknowledge: boolean) => Promise<string | null> }) { if (!workflow) return <aside className="rounded-xl border border-dashed border-border bg-surface p-7 text-center xl:sticky xl:top-0 xl:self-start"><WorkflowIcon className="mx-auto h-7 w-7 text-primary" /><h2 className="mt-3 font-semibold text-foreground">Select a workflow</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">Review its status, dependency order, task results, and available task history.</p></aside>; if (loading) return <aside aria-label="Loading workflow details" className="h-96 animate-pulse rounded-xl border border-border bg-surface xl:sticky xl:top-0 xl:self-start" />; const counts = taskCounts(workflow); const outputs = Object.fromEntries(tasks.filter((task) => task.result !== null).map((task) => [task.task_id, task.result])); const metadata = Object.keys(workflow.metadata).length ? workflow.metadata : null; return <aside className="space-y-4 xl:sticky xl:top-0 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto xl:pr-1"><section className="rounded-xl border border-border bg-surface p-4 shadow-sm"><p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Overview</p><div className="mt-2 flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate font-semibold text-foreground">{workflow.name}</h2><p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{workflow.workflow_id}</p></div><StatusBadge status={workflow.status} /></div><dl className="mt-4 grid grid-cols-2 gap-3 text-xs"><Detail label="Created" value={formatTime(workflow.created_at)} /><Detail label="Duration" value={duration(workflow)} /><Detail label="Completed" value={`${counts.completed} / ${tasks.length}`} /><Detail label="Failures" value={counts.failed} /><Detail label="Plan version" value={workflow.definition_version ? `v${workflow.definition_version}` : "—"} /><Detail label="Attempt" value={workflow.attempt} /></dl>{workflow.error && <p role="status" className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/5 p-2.5 text-xs leading-5 text-amber-100">{workflow.error}</p>}{["failed", "interrupted"].includes(workflow.status) && <div className="mt-3"><RetryControl key={`${workflow.workflow_id}-${workflow.attempt}`} retry={workflow.retry} onRetry={(acknowledge) => onRetry(workflow.workflow_id, acknowledge)} /></div>}</section><section className="rounded-xl border border-border bg-surface p-4 shadow-sm"><div className="flex items-center justify-between"><div><h2 className="font-semibold text-foreground">Tasks & dependencies</h2><p className="mt-1 text-xs text-muted-foreground">Open a task to inspect its tool, dependencies, and result.</p></div><ListChecks className="h-4 w-4 text-primary" /></div><div className="mt-3"><TaskList tasks={tasks} /></div></section>{Object.keys(outputs).length > 0 && <section className="rounded-xl border border-border bg-surface p-4 shadow-sm"><h2 className="font-semibold text-foreground">Results & output</h2><p className="mt-1 text-xs text-muted-foreground">Available completed task outputs.</p><Disclosure label={`${Object.keys(outputs).length} task output${Object.keys(outputs).length === 1 ? "" : "s"}`} value={outputs} /></section>}{tasks.some((task) => task.error) && <section className="rounded-xl border border-red-400/25 bg-red-400/[0.03] p-4"><div className="flex items-center gap-2"><CircleAlert className="h-4 w-4 text-red-300" /><h2 className="font-semibold text-red-100">Errors</h2></div><div className="mt-3 space-y-2">{tasks.filter((task) => task.error).map((task) => <p key={task.task_id} className="text-xs leading-5 text-red-200"><span className="font-medium">{task.name}:</span> {task.error}</p>)}</div></section>}<section className="rounded-xl border border-border bg-surface p-4 shadow-sm"><h2 className="font-semibold text-foreground">Step states</h2><p className="mt-1 text-xs text-muted-foreground">Saved after every step change, so they survive restarts. Completed steps are never re-run by a retry.</p><div className="mt-3 space-y-2">{history.map((item) => <div key={item.id} className="rounded-lg border border-border p-2.5"><div className="flex items-start justify-between gap-2"><div><p className="text-xs font-medium text-foreground">{item.task_name}</p><p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{item.task_id}</p></div><StatusBadge status={item.status} /></div><p className="mt-2 text-[11px] text-muted-foreground">Latest recorded activity · {formatTime(item.timestamp)}</p>{item.error && <p className="mt-1 text-xs text-red-200">{item.error}</p>}</div>)}</div></section>{metadata && <section className="rounded-xl border border-border bg-surface p-4 shadow-sm"><h2 className="font-semibold text-foreground">Metadata</h2><Disclosure label="View metadata" value={metadata} /></section>}</aside>; }
-function ActionButton({ icon: Icon, label, pending, destructive = false, onClick }: { icon: typeof Play; label: string; pending: boolean; destructive?: boolean; onClick: () => void }) { return <button type="button" disabled={pending} onClick={onClick} className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-45", destructive ? "border-red-400/20 text-red-200 hover:bg-red-400/10" : "border-border text-muted-foreground hover:bg-white/[0.06] hover:text-foreground")}>{pending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}{label}</button>; }
-function Empty({ title, text, reset }: { title: string; text: string; reset?: () => void }) { return <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-14 text-center"><WorkflowIcon className="mx-auto h-7 w-7 text-primary" /><h2 className="mt-3 font-semibold text-foreground">{title}</h2><p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{text}</p>{reset && <button type="button" onClick={reset} className="mt-4 text-xs font-semibold text-primary hover:text-primary/80">Clear filters</button>}</div>; }
+/** A consequential action waiting for confirmation, with the server's refusal if it failed. */
+type Pending =
+  | { kind: "run-definition"; definition: StoredWorkflowDefinition; error: string | null }
+  | { kind: "start" | "cancel" | "delete"; run: Workflow; error: string | null };
 
 export default function WorkflowsPage() {
-  const reduceMotion = useReducedMotion(); const realtime = useRealtime(); const state = useWorkflows(realtime); const [query, setQuery] = useState(""); const [status, setStatus] = useState<"all" | WorkflowStatus>("all"); const [notice, setNotice] = useState<string | null>(null);
-  const filtered = useMemo(() => state.workflows.filter((workflow) => (status === "all" || workflow.status === status) && `${workflow.name} ${workflow.description} ${workflow.workflow_id}`.toLowerCase().includes(query.toLowerCase())), [query, state.workflows, status]);
-  const metrics = [{ label: "Total", value: state.workflows.length, icon: WorkflowIcon, tone: "text-primary" }, { label: "Running", value: state.workflows.filter((workflow) => workflow.status === "running").length, icon: Activity, tone: "text-amber-300" }, { label: "Completed", value: state.workflows.filter((workflow) => workflow.status === "completed").length, icon: CheckCircle2, tone: "text-emerald-300" }, { label: "Failed", value: state.workflows.filter((workflow) => workflow.status === "failed").length, icon: XCircle, tone: "text-red-300" }, { label: "Interrupted", value: state.workflows.filter((workflow) => workflow.status === "interrupted").length, icon: CircleAlert, tone: "text-amber-200" }, { label: "Paused", value: state.workflows.filter((workflow) => workflow.status === "paused").length, icon: Pause, tone: "text-violet-300" }, { label: "Cancelled", value: state.workflows.filter((workflow) => workflow.status === "cancelled").length, icon: Clock3, tone: "text-orange-300" }];
-  const lifecycle = async (workflow: Workflow, action: "start" | "pause" | "resume" | "cancel") => { const result = await state.lifecycle(workflow.workflow_id, action); if (result) setNotice(`${workflow.name} ${action === "cancel" ? "cancelled" : `${action}d`}.`); };
-  const [definitionsKey, setDefinitionsKey] = useState(0);
-  const create = async (input: { name: string; description: string; metadata: Record<string, unknown>; tasks: WorkflowTaskCreateInput[] }) => { const result = await state.create(input); if (result) { setNotice(`${result.name} created and selected.`); setDefinitionsKey((key) => key + 1); } return result !== null; };
-  const retryRun = async (workflowId: string, acknowledge: boolean): Promise<string | null> => { try { const run = await WorkflowService.retry(workflowId, acknowledge); setNotice(`${run.name} retry started (attempt ${run.attempt}).`); await state.retry(); await state.selectWorkflow(run.workflow_id); return null; } catch (caught) { return caught instanceof WorkflowApiError ? caught.message : "The retry could not be started."; } };
-  const runStarted = async (run: Workflow) => { setNotice(`${run.name} started.`); await state.retry(); await state.selectWorkflow(run.workflow_id); };
-  return <div className="flex h-screen w-full overflow-hidden"><Sidebar /><div className="flex flex-1 flex-col overflow-hidden"><Topbar /><main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8"><div className="mx-auto flex max-w-7xl flex-col gap-6"><RealtimeNotifications events={state.latestWorkflowEvent ? [state.latestWorkflowEvent] : []} /><header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><div className="flex items-center gap-2"><WorkflowIcon className="h-5 w-5 text-primary" /><h1 className="text-2xl font-semibold tracking-tight text-foreground">Workflows</h1></div><p className="mt-1 text-sm text-muted-foreground">Create, observe, and control dependency-aware Tool Runtime workflows.</p><div className="mt-2"><RealtimeStatus connectionStatus={realtime.connectionStatus} runtimeState="workflow runtime" lastHeartbeat={null} /></div></div><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => void state.retry()} disabled={state.loading} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-medium text-muted-foreground hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-45"><RefreshCw className={cn("h-3.5 w-3.5", state.loading && "animate-spin")} />Refresh</button><CreateWorkflow onCreate={create} pending={state.loading} /></div></header>{notice && <div role="status" className="flex items-center justify-between gap-3 rounded-lg border border-emerald-400/25 bg-emerald-400/5 px-3 py-2 text-sm text-emerald-100"><span>{notice}</span><button type="button" onClick={() => setNotice(null)} aria-label="Dismiss success message" className="rounded p-1 hover:bg-emerald-400/10"><X className="h-3.5 w-3.5" /></button></div>}<section aria-label="Workflow metrics" className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">{state.loading ? Array.from({ length: 7 }, (_, index) => <div key={index} className="h-24 animate-pulse rounded-xl border border-border bg-surface" />) : metrics.map((metric) => <MetricCard key={metric.label} {...metric} />)}</section>{state.error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-200"><span>{state.error}</span><button type="button" onClick={() => void state.retry()} className="rounded-md border border-red-400/25 px-3 py-1.5 text-xs font-medium hover:bg-red-400/10">Retry</button></div>}<DefinitionLibrary refreshKey={definitionsKey} onRunStarted={(run) => void runStarted(run)} /><section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_27rem]"><div><div className="mb-4 flex flex-col gap-3 sm:flex-row"><label className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input aria-label="Search workflows" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, description, or ID" className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-10 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-primary" />{query && <button type="button" onClick={() => setQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-white/5" aria-label="Clear workflow search"><X className="h-3.5 w-3.5" /></button>}</label><select aria-label="Filter workflows by status" value={status} onChange={(event) => setStatus(event.target.value as "all" | WorkflowStatus)} className="rounded-lg border border-border bg-surface px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary"><option value="all">All statuses</option>{workflowStatuses.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>{state.loading ? <div className="space-y-3">{[1, 2, 3].map((item) => <div key={item} className="h-48 animate-pulse rounded-xl border border-border bg-surface" />)}</div> : state.workflows.length === 0 ? <Empty title="No workflows yet" text="Create a workflow to run existing tools in dependency order." /> : filtered.length === 0 ? <Empty title="No matching workflows" text="Try a different name, ID, or status." reset={() => { setQuery(""); setStatus("all"); }} /> : <div className="space-y-3">{filtered.map((workflow, index) => { const counts = taskCounts(workflow); const pending = state.pendingWorkflowIds.has(workflow.workflow_id); return <motion.article key={workflow.workflow_id} initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: reduceMotion ? 0 : Math.min(index * 0.03, 0.18) }} className={cn("rounded-xl border bg-surface p-4 shadow-sm transition-all duration-200 hover:border-white/20 hover:shadow-lg hover:shadow-black/10", state.selectedWorkflow?.workflow_id === workflow.workflow_id ? "border-primary/50 ring-1 ring-primary/15" : "border-border")}><div className="flex flex-col gap-4"><div className="flex flex-col justify-between gap-3 sm:flex-row"><button type="button" onClick={() => void state.selectWorkflow(workflow.workflow_id)} className="min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate font-semibold text-foreground">{workflow.name}</h2><StatusBadge status={workflow.status} /></div><p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">{workflow.description || "No description provided."}</p><p className="mt-2 break-all font-mono text-[11px] text-muted-foreground">{workflow.workflow_id}</p></button><div className="flex shrink-0 flex-wrap items-start gap-2">{workflow.status === "created" && <ActionButton icon={Play} label="Start" pending={pending} onClick={() => void lifecycle(workflow, "start")} />}{workflow.status === "running" && <ActionButton icon={Pause} label="Pause" pending={pending} onClick={() => void lifecycle(workflow, "pause")} />}{workflow.status === "paused" && <ActionButton icon={Play} label="Resume" pending={pending} onClick={() => void lifecycle(workflow, "resume")} />}{activeStatuses.has(workflow.status) || workflow.status === "created" ? <ActionButton icon={Square} label="Cancel" pending={pending} destructive onClick={() => void lifecycle(workflow, "cancel")} /> : null}{["created", "completed", "failed", "cancelled", "interrupted"].includes(workflow.status) && <ActionButton icon={Trash2} label="Delete" pending={pending} destructive onClick={() => { if (window.confirm(`Delete workflow “${workflow.name}”?`)) void state.remove(workflow.workflow_id).then((removed) => removed && setNotice(`${workflow.name} deleted.`)); }} />}</div></div><div className="grid gap-3 border-t border-border pt-3 sm:grid-cols-[minmax(0,1fr)_auto]"><Progress workflow={workflow} /><dl className="grid grid-cols-3 gap-x-5 gap-y-2 text-xs"><Detail label="Active" value={counts.active} /><Detail label="Failed" value={counts.failed} /><Detail label="Duration" value={duration(workflow)} /><Detail label="Created" value={new Date(workflow.created_at).toLocaleDateString()} /></dl></div></div></motion.article>; })}</div>}</div><WorkflowDetails workflow={state.selectedWorkflow} tasks={state.tasks} loading={state.detailsLoading} history={state.history} onRetry={retryRun} /></section></div></main></div></div>;
+  // The tab, saved workflow and run live in the URL (?tab=runs&workflow=…&run=…).
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6 sm:py-8" aria-busy="true"><Skeleton className="h-8 w-40" /><Skeleton className="h-80 w-full" /></div>}>
+      <Workflows />
+    </Suspense>
+  );
+}
+
+/** `?create=1` (used by the command palette) opens the builder, then drops the parameter. */
+function CreateFromLink({ onCreate }: { onCreate: () => void }) {
+  const requested = useSearchParams().get("create") === "1";
+  const router = useRouter();
+  const pathname = usePathname();
+  useEffect(() => {
+    if (!requested) return;
+    onCreate();
+    const params = new URLSearchParams(window.location.search);
+    params.delete("create");
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [requested, onCreate, router, pathname]);
+  return null;
+}
+
+function Workflows() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const realtime = useRealtime();
+  const state = useWorkflows(realtime);
+  const now = useNow();
+  const [tools, setTools] = useState<Map<string, ToolDefinition> | null>(null);
+  const [query, setQuery] = useState("");
+  const [runFilter, setRunFilter] = useState<RunFilter>("all");
+  const [building, setBuilding] = useState(false);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState<string | null>(null);
+  const confirming = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    ToolService.list().then(({ tools: list }) => { if (active) setTools(new Map(list.map((tool) => [tool.name, tool]))); }).catch(() => { if (active) setTools(new Map()); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const tab: Tab = params.get("tab") === "runs" ? "runs" : "workflows";
+  const definitionId = params.get("workflow");
+  const runId = params.get("run");
+  const definition = state.definitions.find((item) => item.definition_id === definitionId) ?? null;
+  const run = state.runs.find((item) => item.workflow_id === runId) ?? null;
+  const toolMap = tools ?? new Map<string, ToolDefinition>();
+  const detailOpen = run !== null || (tab === "workflows" && definition !== null);
+
+  function go(next: { tab?: Tab; workflow?: string | null; run?: string | null }, mode: "push" | "replace" = "push") {
+    const search = new URLSearchParams();
+    const nextTab = next.tab ?? tab;
+    const workflow = next.workflow !== undefined ? next.workflow : definitionId;
+    const nextRun = next.run !== undefined ? next.run : runId;
+    if (nextTab === "runs") search.set("tab", "runs");
+    if (workflow && nextTab === "workflows") search.set("workflow", workflow);
+    if (nextRun) search.set("run", nextRun);
+    const queryString = search.toString();
+    router[mode](queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
+  }
+
+  async function confirm() {
+    if (!pending || confirming.current) return;
+    confirming.current = true;
+    try {
+      if (pending.kind === "run-definition") {
+        const result = await state.runDefinition(pending.definition.definition_id);
+        if (result.run === null) { setPending({ ...pending, error: result.error }); return; }
+        setPending(null);
+        setNotice(`Started a run of ${pending.definition.name}.`);
+        go({ tab: "workflows", workflow: pending.definition.definition_id, run: result.run.workflow_id });
+      } else if (pending.kind === "delete") {
+        const result = await state.remove(pending.run.workflow_id);
+        if (!result.ok) { setPending({ ...pending, error: result.error }); return; }
+        setPending(null);
+        setNotice("Run deleted.");
+        go({ run: null }, "replace");
+      } else {
+        const result = await state.lifecycle(pending.run.workflow_id, pending.kind);
+        if (result.run === null) { setPending({ ...pending, error: result.error }); return; }
+        setPending(null);
+        setNotice(pending.kind === "start" ? "Run started." : "Run cancelled.");
+      }
+    } finally {
+      confirming.current = false;
+    }
+  }
+
+  async function quickAction(target: Workflow, action: "pause" | "resume") {
+    const result = await state.lifecycle(target.workflow_id, action);
+    setActionErrors((current) => ({ ...current, [target.workflow_id]: result.error ?? "" }));
+    if (!result.error) setNotice(action === "pause" ? "Run paused." : "Run resumed.");
+  }
+
+  function request(target: Workflow, action: RunRequest) {
+    if (action === "pause" || action === "resume") void quickAction(target, action);
+    else setPending({ kind: action, run: target, error: null });
+  }
+
+  const definitions = filterDefinitions(state.definitions, query);
+  const runs = filterRuns(state.runs, query, runFilter);
+  const tabs: TabItem<Tab>[] = [
+    { value: "workflows", label: "Workflows", badge: state.loaded ? state.definitions.length : undefined },
+    { value: "runs", label: "Runs", badge: state.loaded ? state.runs.length : undefined },
+  ];
+  const pendingBusy = pending !== null && state.pendingIds.has(pending.kind === "run-definition" ? pending.definition.definition_id : pending.run.workflow_id);
+
+  return (
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+      <RealtimeNotifications events={realtime.latestEvent ? [realtime.latestEvent] : []} />
+      <PageHeader
+        title="Workflows"
+        description="Multi-step jobs the server runs for you: each step calls a tool, in the order its dependencies allow. Runs keep going if you leave this page."
+        actions={<Button variant="primary" icon={<Plus aria-hidden className="h-4 w-4" />} onClick={() => setBuilding(true)} disabled={tools === null}>Create workflow</Button>}
+      />
+      <p role="status" aria-live="polite" className={cn("text-sm text-success", !notice && "sr-only")}>{notice ?? ""}</p>
+
+      {state.error && !state.loaded ? (
+        <Alert tone="danger" action={<Button size="sm" onClick={() => void state.reload()} loading={state.loading}>Try again</Button>}>
+          <p className="font-medium">Workflows couldn&apos;t be loaded.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{state.error}</p>
+        </Alert>
+      ) : !state.loaded ? (
+        <div className="flex flex-col gap-2" aria-busy="true" aria-label="Loading workflows">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-14 w-full" />)}</div>
+      ) : state.definitions.length === 0 && state.runs.length === 0 ? (
+        <EmptyState icon={WorkflowIcon} title="No workflows yet"
+          description="Create one by listing the tool steps it should run and what each step waits for. Saving doesn't run anything; you start runs yourself."
+          action={<Button variant="primary" size="sm" icon={<Plus aria-hidden className="h-3.5 w-3.5" />} onClick={() => setBuilding(true)} disabled={tools === null}>Create workflow</Button>} />
+      ) : (
+        <>
+          {state.error && <Alert tone="warning" action={<Button size="sm" onClick={() => void state.reload()} loading={state.loading}>Refresh</Button>}>Couldn&apos;t refresh: {state.error}</Alert>}
+          <div>
+            <Tabs idPrefix={TAB_PREFIX} label="Workflow views" items={tabs} value={tab} onChange={(value) => go({ tab: value, workflow: null, run: null }, "replace")} />
+            <div {...tabPanelProps(TAB_PREFIX, tab)} className="pt-5 focus:outline-none">
+              <div className={cn("mb-4 flex flex-col gap-2 sm:flex-row sm:items-center", detailOpen && "hidden lg:flex")}>
+                <div className="relative sm:w-72">
+                  <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tab === "runs" ? "Search runs" : "Search by name, step or tool"} aria-label={tab === "runs" ? "Search runs" : "Search workflows"} className="pl-8 pr-8" />
+                  {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"><X aria-hidden className="h-3.5 w-3.5" /></button>}
+                </div>
+                {tab === "runs" && (
+                  <Select aria-label="Run status" value={runFilter} onChange={(event) => setRunFilter(event.target.value as RunFilter)} className="sm:w-44">
+                    {RUN_FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </Select>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+                <div className={cn("min-w-0", detailOpen && "hidden lg:block")}>
+                  {tab === "workflows" ? (
+                    definitions.length === 0 ? (
+                      <EmptyState icon={Search} title={state.definitions.length ? "No workflows match" : "No saved workflows"} description={state.definitions.length ? "Try another search." : "Runs exist, but their saved workflows aren't listed."}
+                        action={query ? <Button size="sm" onClick={() => setQuery("")}>Clear search</Button> : undefined} />
+                    ) : (
+                      <ul aria-label="Saved workflows" className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
+                        {definitions.map((item) => <DefinitionRow key={item.definition_id} definition={item} runs={runsOf(state.runs, item.definition_id)} tools={tools} now={now} selected={item.definition_id === definitionId} onSelect={() => go({ workflow: item.definition_id, run: null })} />)}
+                      </ul>
+                    )
+                  ) : runs.length === 0 ? (
+                    <EmptyState icon={Search} title={state.runs.length ? "No runs match" : "No runs yet"} description={state.runs.length ? "Try another search or status." : "Run a saved workflow to see it here."}
+                      action={query || runFilter !== "all" ? <Button size="sm" onClick={() => { setQuery(""); setRunFilter("all"); }}>Clear filters</Button> : undefined} />
+                  ) : (
+                    <ul aria-label="Workflow runs" className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
+                      {runs.map((item) => <RunRow key={item.workflow_id} run={item} now={now} selected={item.workflow_id === runId} onSelect={() => go({ run: item.workflow_id })} />)}
+                    </ul>
+                  )}
+                </div>
+
+                <section aria-label="Details" className={cn("min-w-0 rounded-lg border border-border bg-surface p-4 sm:p-5", !detailOpen && "hidden lg:block")}>
+                  {run ? (
+                    <RunView key={run.workflow_id} run={run} tools={toolMap} now={now} pending={state.pendingIds.has(run.workflow_id)} actionError={actionErrors[run.workflow_id] || null}
+                      onRequest={(action) => request(run, action)}
+                      onRetry={async (acknowledge) => { const result = await state.retry(run.workflow_id, acknowledge); if (!result.error) setNotice("Retry queued: unfinished steps will run again."); return result.error; }}
+                      onBack={() => go({ run: null })}
+                      onOpenDefinition={run.definition_id && state.definitions.some((item) => item.definition_id === run.definition_id) ? () => go({ tab: "workflows", workflow: run.definition_id, run: null }) : null} />
+                  ) : tab === "workflows" && definition ? (
+                    <DefinitionView key={definition.definition_id} definition={definition} runs={runsOf(state.runs, definition.definition_id)} tools={toolMap} now={now}
+                      pending={state.pendingIds.has(definition.definition_id)} onRun={() => setPending({ kind: "run-definition", definition, error: null })}
+                      onOpenRun={(id) => go({ run: id })} onBack={() => go({ workflow: null })} />
+                  ) : (runId || definitionId) && state.loaded ? (
+                    <EmptyState title="Not found" description="This workflow or run no longer exists. It may have been deleted." action={<Button size="sm" onClick={() => go({ workflow: null, run: null }, "replace")}>Back to the list</Button>} />
+                  ) : (
+                    <div className="flex min-h-48 flex-col items-center justify-center text-center">
+                      <WorkflowIcon aria-hidden className="h-5 w-5 text-muted-foreground" />
+                      <p className="mt-2 text-sm text-foreground">{tab === "runs" ? "Select a run to follow its steps" : "Select a workflow to see its steps"}</p>
+                      <p className="mt-1 max-w-xs text-xs text-muted-foreground">Opening something never runs it.</p>
+                    </div>
+                  )}
+                </section>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      <CreateFromLink onCreate={() => setBuilding(true)} />
+      {building && tools !== null && (
+        <WorkflowBuilder tools={[...tools.values()]} onClose={() => setBuilding(false)}
+          onCreate={async (input) => {
+            const result = await state.create(input);
+            if (result.run === null) return result.error;
+            setNotice(`Saved ${result.run.name}. Its first run is ready; start it when you want.`);
+            go({ tab: "workflows", workflow: result.run.definition_id, run: result.run.workflow_id });
+            return null;
+          }} />
+      )}
+
+      <ConfirmDialog pending={pending} busy={pendingBusy} tools={toolMap} onCancel={() => { if (!pendingBusy) setPending(null); }} onConfirm={() => void confirm()} />
+    </div>
+  );
+}
+
+function DefinitionRow({ definition, runs, tools, now, selected, onSelect }: { definition: StoredWorkflowDefinition; runs: Workflow[]; tools: ReadonlyMap<string, ToolDefinition> | null; now: Date; selected: boolean; onSelect: () => void }) {
+  const latest = runs[0];
+  const unavailable = tools && tools.size > 0 ? toolsUsed(definition.tasks).filter((name) => !tools.get(name)?.enabled) : [];
+  return (
+    <li>
+      <button type="button" data-definition={definition.definition_id} onClick={onSelect} aria-current={selected ? "true" : undefined}
+        className={cn("relative flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-white/[0.025]", selected && "bg-white/[0.05]")}>
+        {selected && <span aria-hidden className="absolute inset-y-2.5 left-0 w-0.5 rounded-full bg-accent" />}
+        <span className="flex items-start justify-between gap-3">
+          <span className="min-w-0 break-words text-sm font-medium text-foreground">{definition.name}</span>
+          {latest ? <StatusBadge status={latest.status} className="shrink-0" /> : <span className="shrink-0 text-[11px] text-subtle">Not run yet</span>}
+        </span>
+        {definition.description && <span className="line-clamp-1 text-xs text-muted-foreground">{definition.description}</span>}
+        <span className="text-[11px] text-subtle">
+          {definition.tasks.length} step{definition.tasks.length === 1 ? "" : "s"} · v{definition.version}{latest ? ` · last run ${relativeTime(latest.created_at, now)}` : ""}
+        </span>
+        {unavailable.length > 0 && <span className="text-[11px] text-warning">Can&apos;t run: uses {unavailable.map(toolLabel).join(", ")}, which {unavailable.length === 1 ? "isn't" : "aren't"} available</span>}
+      </button>
+    </li>
+  );
+}
+
+function RunRow({ run, now, selected, onSelect }: { run: Workflow; now: Date; selected: boolean; onSelect: () => void }) {
+  const progress = runProgress(run);
+  return (
+    <li>
+      <button type="button" data-run={run.workflow_id} onClick={onSelect} aria-current={selected ? "true" : undefined}
+        className={cn("relative flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-white/[0.025]", selected && "bg-white/[0.05]")}>
+        {selected && <span aria-hidden className="absolute inset-y-2.5 left-0 w-0.5 rounded-full bg-accent" />}
+        <span className="flex items-start justify-between gap-3">
+          <span className="min-w-0 break-words text-sm text-foreground">{run.name}</span>
+          <StatusBadge status={run.status} className="shrink-0" />
+        </span>
+        <span className="text-[11px] text-subtle">
+          {progress.completed}/{progress.total} steps{run.definition_version ? ` · v${run.definition_version}` : ""}{run.attempt > 1 ? ` · attempt ${run.attempt}` : ""} · updated {relativeTime(run.updated_at, now)}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function ConfirmDialog({ pending, busy, tools, onCancel, onConfirm }: { pending: Pending | null; busy: boolean; tools: ReadonlyMap<string, ToolDefinition>; onCancel: () => void; onConfirm: () => void }) {
+  const copy = !pending ? null
+    : pending.kind === "run-definition" ? { title: `Run ${pending.definition.name}?`, body: `This creates a new run of version ${pending.definition.version} and the server starts it right away.`, steps: pending.definition.tasks, button: "Run workflow", danger: false }
+    : pending.kind === "start" ? { title: "Start this run?", body: "The server starts its steps right away. Leaving this page won't stop it.", steps: pending.run.tasks, button: "Start run", danger: false }
+    : pending.kind === "cancel" ? { title: "Cancel this run?", body: "Steps that haven't finished are cancelled, and a step that's running is stopped. A cancelled run can't be restarted.", steps: null, button: "Cancel run", danger: true }
+    : { title: "Delete this run?", body: "This removes the run and its step history. The saved workflow isn't affected.", steps: null, button: "Delete run", danger: true };
+  const external = copy?.steps ? toolsUsed(copy.steps).filter((name) => tools.get(name)?.side_effects) : [];
+
+  return (
+    <Dialog open={pending !== null} onClose={onCancel} title={copy?.title ?? ""} description={copy?.body}
+      footer={pending && copy && (
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <Button onClick={onCancel} disabled={busy} data-autofocus>{pending.kind === "cancel" ? "Keep running" : "Cancel"}</Button>
+          <Button variant={copy.danger ? "danger" : "primary"} onClick={onConfirm} loading={busy}>{copy.button}</Button>
+        </div>
+      )}>
+      {pending && copy && (
+        <div className="flex flex-col gap-3 text-sm">
+          {copy.steps && (
+            <p className="text-muted-foreground">
+              {copy.steps.length} step{copy.steps.length === 1 ? "" : "s"} using {toolsUsed(copy.steps).map(toolLabel).join(", ")}. Each step calls its tool directly on the server; no Agent is involved.
+            </p>
+          )}
+          {external.length > 0 && <Alert tone="warning"><span className="text-xs">{external.map(toolLabel).join(", ")} may change things outside Genesis.</span></Alert>}
+          {pending.error && <Alert tone="danger">The server refused: {pending.error}</Alert>}
+        </div>
+      )}
+    </Dialog>
+  );
 }

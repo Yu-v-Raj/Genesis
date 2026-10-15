@@ -30,14 +30,14 @@ export function RetryControl({ retry, onRetry }: { retry: RetryInfo | null; onRe
   }
 
   return (
-    <div className={`rounded-lg border p-3 text-xs ${presentation.needsConfirmation ? "border-amber-400/25 bg-amber-400/5" : "border-border bg-background/40"}`}>
-      <p className={`flex items-start gap-2 leading-5 ${presentation.needsConfirmation ? "text-amber-100" : "text-muted-foreground"}`}>
-        {presentation.needsConfirmation && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+    <div className={`rounded-lg border p-3 text-xs ${presentation.needsConfirmation ? "tone-warning tone-border tone-bg" : "border-border bg-background/40"}`}>
+      <p className={`flex items-start gap-2 leading-5 ${presentation.needsConfirmation ? "text-foreground" : "text-muted-foreground"}`}>
+        {presentation.needsConfirmation && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />}
         {presentation.explanation}
       </p>
       {presentation.needsConfirmation && (
-        <label htmlFor={`${id}-confirm`} className="mt-2 flex items-center gap-2 text-amber-100">
-          <input id={`${id}-confirm`} type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="accent-primary" />
+        <label htmlFor={`${id}-confirm`} className="mt-2 flex items-center gap-2 text-foreground">
+          <input id={`${id}-confirm`} type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="accent-[var(--color-warning)]" />
           I understand this may repeat an external action.
         </label>
       )}
@@ -50,7 +50,7 @@ export function RetryControl({ retry, onRetry }: { retry: RetryInfo | null; onRe
         {pending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />}
         {pending ? "Retrying…" : presentation.label}
       </button>
-      {error && <p role="alert" className="mt-2 text-red-200">{error}</p>}
+      {error && <p role="alert" className="mt-2 text-danger">{error}</p>}
     </div>
   );
 }
