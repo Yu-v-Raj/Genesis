@@ -98,9 +98,11 @@ class ExecutionResponse(BaseModel):
 
 
 class ExecutionListResponse(BaseModel):
-    """A newest-first execution collection."""
+    """A newest-first execution collection. Pass ``next_before`` as ``before`` for older ones."""
 
     executions: list[ExecutionResponse]
+    # Opaque cursor naming the last execution returned (see core_services/pagination.py).
+    next_before: str | None = None
 
 
 class ExecutionCreateRequest(BaseModel):

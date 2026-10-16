@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, Bot, Brain, ChevronRight, Cpu, Database, Radio, Search, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Bot, Brain, ChevronRight, Cpu, Database, Radio, Search, ShieldCheck, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 import { CopyButton } from "@/components/ui/copy-button";
 import { JsonView } from "@/components/ui/disclosure";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import type { RealtimeEvent } from "@/types/realtime";
 
 const ICONS: Record<EventCategory, LucideIcon> = {
-  agent: Bot, execution: Activity, model: Brain, tool: Wrench, memory: Database, workflow: Workflow, system: Cpu, log: Radio,
+  agent: Bot, execution: Activity, model: Brain, tool: Wrench, approval: ShieldCheck, memory: Database, workflow: Workflow, system: Cpu, log: Radio,
 };
 
 const PAGE = 100;
@@ -48,6 +48,8 @@ function EventRow({ event, agentNames, now }: { event: RealtimeEvent; agentNames
 }
 
 /** The retained event history plus live events, newest first, with readable descriptions. */
+export { ICONS as EVENT_ICONS };
+
 export function EventStream({ events, agentNames, now }: { events: RealtimeEvent[]; agentNames: Record<string, string>; now: Date }) {
   const [category, setCategory] = useState<EventCategory | "all">("all");
   const [query, setQuery] = useState("");

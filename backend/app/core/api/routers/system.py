@@ -47,6 +47,9 @@ SERVICE_METADATA = {
     "AgentRegistry": "Tracks Agent Runtime metadata.",
     "AgentManager": "Coordinates Agent Runtime lifecycle and context.",
     "ApprovalService": "Records operator decisions for side-effecting tool calls.",
+    "RuntimeEventStore": "Stores execution, workflow, tool, approval and model-call events.",
+    "DurableEventRecorder": "Writes lifecycle events to the database in the background.",
+    "OperationsQueryService": "Assembles read-only execution and workflow traces.",
 }
 
 PLUGIN_DEFAULT = {

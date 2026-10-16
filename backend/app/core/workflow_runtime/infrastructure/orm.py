@@ -1,10 +1,11 @@
-"""SQLAlchemy tables for workflow definitions, runs, and run steps (persistence detail)."""
+"""SQLAlchemy tables for workflow definitions, runs, run steps and run timelines (persistence detail)."""
 
 from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -22,6 +24,7 @@ from backend.app.database.base import Base
 
 
 JSONType = JSON().with_variant(JSONB(), "postgresql")
+SerialId = BigInteger().with_variant(Integer(), "sqlite")
 RUN_STATUSES = "('created', 'queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'interrupted', 'waiting_approval')"
 STEP_STATUSES = "('pending', 'ready', 'running', 'completed', 'failed', 'cancelled', 'blocked', 'interrupted', 'waiting_approval')"
 
@@ -90,3 +93,21 @@ class WorkflowRunStepRow(Base):
     error: Mapped[str | None] = mapped_column(Text)
     step_metadata: Mapped[dict[str, object]] = mapped_column("metadata", JSONType)
     approval_id: Mapped[UUID | None] = mapped_column(Uuid)
+
+
+class WorkflowRunTransitionRow(Base):
+    """One status change of a run (``step_id`` NULL) or of one of its steps."""
+
+    __tablename__ = "workflow_run_transitions"
+    __table_args__ = (UniqueConstraint("run_id", "sequence", name="uq_workflow_run_transitions_run_sequence"),)
+
+    id: Mapped[int] = mapped_column(SerialId, primary_key=True, autoincrement=True)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("workflow_runs.id", ondelete="CASCADE"))
+    sequence: Mapped[int] = mapped_column(Integer)
+    step_id: Mapped[str | None] = mapped_column(String(200))
+    attempt: Mapped[int] = mapped_column(Integer)
+    from_status: Mapped[str | None] = mapped_column(String(16))
+    to_status: Mapped[str] = mapped_column(String(16))
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    worker: Mapped[str | None] = mapped_column(String(200))
+    detail: Mapped[str | None] = mapped_column(Text)

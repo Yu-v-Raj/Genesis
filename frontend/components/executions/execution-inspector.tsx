@@ -4,18 +4,20 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Wrench } from "lucide-react";
 
 import { RetryControl } from "@/components/durable/retry-control";
+import { ApprovalsSection, ModelCallsSection, ToolRunsSection, TruncationNote } from "@/components/operations/trace-sections";
 import { IconButton } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Disclosure, JsonView } from "@/components/ui/disclosure";
+import { useNow } from "@/hooks/use-now";
 import { Alert, Skeleton } from "@/components/ui/feedback";
 import { StatusBadge, StatusDot } from "@/components/ui/status-badge";
 import { describeTransition, executionLabel, isActive, isChat } from "@/lib/durable-work";
 import { errorCategoryExplanation, errorCategoryLabel, executionKind, formatDuration, kindLabel } from "@/lib/operations";
 import { statusPresentation } from "@/lib/status";
 import { ExecutionApiError, ExecutionService } from "@/services/execution.service";
-import { ToolService } from "@/services/tool.service";
-import type { Execution, ExecutionTransition } from "@/types/executions";
-import type { ToolTask } from "@/types/tools";
+import { OperationsApiError, OperationsService } from "@/services/operations.service";
+import type { Execution } from "@/types/executions";
+import type { ExecutionTrace } from "@/types/operations";
 
 interface StartedTool {
   name: string;
@@ -59,9 +61,10 @@ function IdRow({ label, value }: { label: string; value: string | null | undefin
 }
 
 /**
- * One execution in detail: summary first, then output, tools, timeline, retry, and finally
- * the raw technical record. Retry is entirely server-gated (see RetryControl); opening an
- * execution never starts anything.
+ * One execution in detail: summary first, then output, model calls, tool runs, approvals,
+ * timeline, retry, and finally the raw technical record. Everything comes from one
+ * read-only trace request; retry is entirely server-gated (see RetryControl), and opening
+ * an execution never starts or changes anything.
  */
 export function ExecutionInspector({
   executionId,
@@ -81,25 +84,16 @@ export function ExecutionInspector({
   onBack?: () => void;
 }) {
   const updatedAt = summary?.updated_at ?? null;
-  const [detail, setDetail] = useState<{ id: string; execution: Execution; timeline: ExecutionTransition[] } | null>(null);
+  const now = useNow();
+  const [detail, setDetail] = useState<{ id: string; trace: ExecutionTrace } | null>(null);
   const [error, setError] = useState<{ id: string; message: string } | null>(null);
-  const [toolTasks, setToolTasks] = useState<{ id: string; tasks: ToolTask[] | null } | null>(null);
 
   // Reload whenever the selection changes or the list reports a newer version of it.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([ExecutionService.get(executionId), ExecutionService.history(executionId)])
-      .then(([execution, history]) => { if (!cancelled) { setDetail({ id: executionId, execution, timeline: history.transitions }); setError(null); } })
-      .catch((cause) => { if (!cancelled) setError({ id: executionId, message: cause instanceof ExecutionApiError ? cause.message : "Unable to load this execution." }); });
-    return () => { cancelled = true; };
-  }, [executionId, updatedAt]);
-
-  // Tool results live in the Tool Runtime's history (kept in memory until the backend restarts).
-  useEffect(() => {
-    let cancelled = false;
-    ToolService.history()
-      .then(({ tasks }) => { if (!cancelled) setToolTasks({ id: executionId, tasks: tasks.filter((task) => task.execution_id === executionId) }); })
-      .catch(() => { if (!cancelled) setToolTasks({ id: executionId, tasks: null }); });
+    OperationsService.executionTrace(executionId)
+      .then((trace) => { if (!cancelled) { setDetail({ id: executionId, trace }); setError(null); } })
+      .catch((cause) => { if (!cancelled) setError({ id: executionId, message: cause instanceof OperationsApiError ? cause.message : "Unable to load this execution." }); });
     return () => { cancelled = true; };
   }, [executionId, updatedAt]);
 
@@ -114,7 +108,7 @@ export function ExecutionInspector({
     }
   }
 
-  const current = detail?.id === executionId ? detail : null;
+  const current = detail?.id === executionId ? detail.trace : null;
   const execution = current?.execution ?? summary;
   const loadError = error?.id === executionId ? error.message : null;
 
@@ -124,7 +118,7 @@ export function ExecutionInspector({
       : <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading execution"><Skeleton className="h-5 w-24" /><Skeleton className="h-4 w-3/4" /><Skeleton className="h-16 w-full" /></div>;
   }
 
-  const tasks = toolTasks?.id === executionId ? toolTasks.tasks : undefined;
+  const tasks = current?.tool_tasks;
   const started = startedToolsDetail(execution);
   const kind = executionKind(execution);
   const output = execution.result?.output;
@@ -183,55 +177,37 @@ export function ExecutionInspector({
         </section>
       )}
 
-      {(started.length > 0 || (tasks && tasks.length > 0)) && (
+      {current && <ModelCallsSection calls={current.model_calls} />}
+
+      {tasks && tasks.length > 0 ? (
+        <ToolRunsSection tasks={tasks} now={now} />
+      ) : started.length > 0 && (
         <section aria-label="Tool activity">
           <h3 className="text-xs font-medium text-muted-foreground">Tool activity</h3>
-          {tasks && tasks.length > 0 ? (
-            <ul className="mt-1.5 flex flex-col gap-1.5">
-              {tasks.map((task) => (
-                <li key={task.task_id} className="rounded-md border border-border bg-surface-2/50">
-                  <div className="flex items-center justify-between gap-2 px-3 py-2">
-                    <span className="flex min-w-0 items-center gap-2 text-xs text-foreground"><Wrench aria-hidden className="h-3.5 w-3.5 text-muted-foreground" /><span className="truncate">{task.tool_name}</span></span>
-                    <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">{formatDuration(task.result?.duration)}<StatusBadge status={task.result?.status ?? task.status} /></span>
-                  </div>
-                  {task.result && (task.result.output !== null || task.result.error) && (
-                    <Disclosure summary="Result" className="mx-2 mb-2">
-                      {task.result.error && <p className="mb-2 break-words text-xs text-danger">{task.result.error}</p>}
-                      {task.result.output !== null && <JsonView value={task.result.output} />}
-                    </Disclosure>
-                  )}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <>
-              <ul className="mt-1.5 flex flex-wrap gap-1.5">
-                {started.map((tool, index) => (
-                  <li key={`${tool.name}-${index}`} className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2/50 px-2 py-1 text-xs text-foreground">
-                    <Wrench aria-hidden className="h-3 w-3 text-muted-foreground" />{tool.name}
-                    {tool.side_effects && <span className="text-[10px] text-warning">may change things outside Genesis</span>}
-                  </li>
-                ))}
-              </ul>
-              {tasks !== undefined && (
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  {tasks === null ? "Tool results couldn't be loaded." : "Tool results are kept only until the backend restarts, so they're no longer available for this run."}
-                </p>
-              )}
-            </>
-          )}
+          <ul className="mt-1.5 flex flex-wrap gap-1.5">
+            {started.map((tool, index) => (
+              <li key={`${tool.name}-${index}`} className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2/50 px-2 py-1 text-xs text-foreground">
+                <Wrench aria-hidden className="h-3 w-3 text-muted-foreground" />{tool.name}
+                {tool.side_effects && <span className="text-[10px] text-warning">may change things outside Genesis</span>}
+              </li>
+            ))}
+          </ul>
+          {current && <p className="mt-1.5 text-[11px] text-muted-foreground">No tool run was recorded for this run. Runs from before tool history was stored durably only list the tools they started.</p>}
         </section>
       )}
+
+      {current && <ApprovalsSection approvals={current.approvals} now={now} />}
+      {current && <TruncationNote limits={current.truncated} />}
 
       <section aria-label="Timeline">
         <h3 className="text-xs font-medium text-muted-foreground">Timeline</h3>
         {current === null && !loadError ? (
           <div className="mt-2 flex flex-col gap-2" aria-busy="true"><Skeleton className="h-3 w-2/3" /><Skeleton className="h-3 w-1/2" /><Skeleton className="h-3 w-3/5" /></div>
-        ) : current && current.timeline.length > 0 ? (
+        ) : current && current.transitions.length > 0 ? (
           <ol className="mt-2 flex flex-col">
-            {current.timeline.map((step, index) => (
+            {current.transitions.map((step, index) => (
               <li key={step.sequence} className="relative flex gap-3 pb-3 last:pb-0">
-                {index < current.timeline.length - 1 && <span aria-hidden className="absolute left-[3px] top-3 h-full w-px bg-border" />}
+                {index < current.transitions.length - 1 && <span aria-hidden className="absolute left-[3px] top-3 h-full w-px bg-border" />}
                 <StatusDot tone={statusPresentation(step.to_status).tone} className="relative mt-1.5" />
                 <div className="min-w-0 flex-1">
                   <p className="break-words text-xs leading-5 text-foreground">{describeTransition(step)}</p>

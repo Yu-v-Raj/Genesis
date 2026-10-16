@@ -33,6 +33,7 @@ from backend.app.core.agent_runtime.application.agent_registry import AgentRegis
 from backend.app.core.agent_runtime.domain.status import AgentStatus
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.core_services.logging.logger import logger
+from backend.app.core.core_services.pagination import PageCursor
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.execution_runtime.application.execution_executor import ExecutionExecutor
 from backend.app.core.execution_runtime.application.execution_history import ExecutionHistory
@@ -263,9 +264,11 @@ class ExecutionManager:
             raise ExecutionNotFoundError(execution_id)
         return execution
 
-    async def list_executions(self, agent_id: UUID | None = None) -> tuple[Execution, ...]:
-        """Return newest-first executions, optionally for one Agent."""
-        return await self._repository.list(agent_id)
+    async def list_executions(
+        self, agent_id: UUID | None = None, *, before: PageCursor | None = None, limit: int = 200
+    ) -> tuple[Execution, ...]:
+        """Return newest-first executions, optionally for one Agent or after a page cursor."""
+        return await self._repository.list(agent_id, limit, before=before)
 
     async def execution_history(self, execution_id: UUID) -> tuple[ExecutionTransition, ...]:
         await self.get_execution(execution_id)

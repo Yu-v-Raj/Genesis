@@ -35,5 +35,9 @@ class ApprovalRepository(ABC):
         """Newest first."""
 
     @abstractmethod
+    async def related(self, *, execution_id: UUID | None = None, workflow_id: UUID | None = None, limit: int = 200) -> tuple[Approval, ...]:
+        """Requests made for one execution or one workflow run, newest first. Read only."""
+
+    @abstractmethod
     async def due_for_expiry(self, now: datetime) -> tuple[Approval, ...]:
         """Active requests whose deadline has passed."""

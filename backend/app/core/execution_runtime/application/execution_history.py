@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from threading import RLock
 from uuid import UUID
 
+from backend.app.core.core_services.pagination import PageCursor, comes_after, newest_first
 from backend.app.core.core_services.persistence import PersistenceConflictError
 from backend.app.core.execution_runtime.application.repositories import ExecutionRepository
 from backend.app.core.execution_runtime.domain.exceptions import ExecutionNotFoundError
@@ -61,10 +62,10 @@ class ExecutionHistory(ExecutionRepository):
         with self._lock:
             return self._executions.get(execution_id)
 
-    async def list(self, agent_id: UUID | None = None, limit: int = 200) -> tuple[Execution, ...]:
+    async def list(self, agent_id: UUID | None = None, limit: int = 200, *, before: PageCursor | None = None) -> tuple[Execution, ...]:
         with self._lock:
-            items = [self._executions[execution_id] for execution_id in self._items]
-        items = [item for item in items if agent_id is None or item.agent_id == agent_id]
+            items = newest_first((self._executions[execution_id] for execution_id in self._items), lambda e: e.created_at, lambda e: e.execution_id)
+        items = [item for item in items if (agent_id is None or item.agent_id == agent_id) and comes_after(item.created_at, item.execution_id, before)]
         return tuple(items[:limit])
 
     async def history(self, execution_id: UUID) -> tuple[ExecutionTransition, ...]:

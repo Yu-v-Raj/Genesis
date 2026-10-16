@@ -65,6 +65,9 @@ jobs:
           backend/app/core/workflow_runtime/infrastructure
           backend/app/core/memory/infrastructure
           backend/app/core/approval_gateway/infrastructure
+          backend/app/core/tool_runtime/infrastructure
+          backend/app/core/observability/tests
+          backend/app/core/core_services/tests/test_page_cursors.py
 
       - name: Migrations on SQLite (upgrade, drift check, downgrade, upgrade)
         env:

@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from uuid import UUID
 
+from backend.app.core.core_services.pagination import PageCursor
 from backend.app.core.execution_runtime.domain.execution import Execution
 from backend.app.core.execution_runtime.domain.transition import ExecutionTransition
 
@@ -28,8 +29,8 @@ class ExecutionRepository(ABC):
     async def get(self, execution_id: UUID) -> Execution | None: ...
 
     @abstractmethod
-    async def list(self, agent_id: UUID | None = None, limit: int = 200) -> tuple[Execution, ...]:
-        """Newest first."""
+    async def list(self, agent_id: UUID | None = None, limit: int = 200, *, before: PageCursor | None = None) -> tuple[Execution, ...]:
+        """Newest first by (created_at, execution_id); ``before`` continues after that cursor."""
 
     @abstractmethod
     async def history(self, execution_id: UUID) -> tuple[ExecutionTransition, ...]: ...

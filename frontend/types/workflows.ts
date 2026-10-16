@@ -86,7 +86,11 @@ export interface WorkflowHistoryItem {
   error: string | null;
 }
 
-export interface WorkflowListResponse { workflows: Workflow[]; }
+export interface WorkflowListResponse {
+  workflows: Workflow[];
+  /** Pass as `before` to load older runs; an opaque cursor; `null` when there are none. */
+  next_before?: string | null;
+}
 export interface WorkflowTaskListResponse { tasks: WorkflowTask[]; }
 export type WorkflowCreateRequest = WorkflowDefinition;
 export type WorkflowCreateResponse = Workflow;

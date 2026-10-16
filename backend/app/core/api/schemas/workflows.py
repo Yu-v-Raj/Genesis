@@ -47,7 +47,10 @@ class WorkflowResponse(BaseModel):
             attempt=workflow.attempt, error=workflow.error,
             retry=None if retry is None else RetryInfoResponse(allowed=retry.allowed, requires_acknowledgement=retry.requires_acknowledgement, reason=retry.reason),
         )
-class WorkflowListResponse(BaseModel): workflows: list[WorkflowResponse]
+class WorkflowListResponse(BaseModel):
+    """Newest first. Pass ``next_before`` as ``before`` to load older runs (None: no more)."""
+    workflows: list[WorkflowResponse]
+    next_before: str | None = None  # opaque cursor naming the last run returned
 class WorkflowTaskListResponse(BaseModel): tasks: list[WorkflowTaskResponse]
 
 

@@ -176,14 +176,22 @@ function ToolRow({ tool, allowedCount, selected, onSelect }: { tool: ToolDefinit
 
 function RecentRuns({ state, now }: { state: ReturnType<typeof useTools>; now: Date }) {
   if (state.loading && state.tasks.length === 0) return <div className="flex flex-col gap-2" aria-busy="true">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-10 w-full" />)}</div>;
-  if (state.tasks.length === 0) return <EmptyState icon={Wrench} title="No tool runs yet" description="Runs appear here when an Agent calls a tool or you run a test. They're kept in memory until the backend restarts." />;
+  if (state.tasks.length === 0) return <EmptyState icon={Wrench} title="No tool runs yet" description="Runs appear here when an Agent calls a tool, a workflow step runs, or you run a test. They're stored, so they stay after a restart." />;
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs text-muted-foreground">Newest first. The server keeps the latest 1,000 runs in memory until it restarts. Expand a run to see its result.</p>
-      <ul aria-label="Recent tool runs" className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
-        {state.tasks.slice(0, 100).map((task) => <ToolRunRow key={task.task_id} task={task} now={now} showTool />)}
-      </ul>
-      {state.tasks.length > 100 && <p className="text-[11px] text-subtle">Showing the 100 most recent of {state.tasks.length}.</p>}
+      <p className="text-xs text-muted-foreground">Newest first, from stored history. Expand a run to see its arguments (secret-looking values hidden) and result.</p>
+      <div className="overflow-hidden rounded-lg border border-border bg-surface">
+        <ul aria-label="Recent tool runs" className="divide-y divide-border">
+          {state.tasks.map((task) => <ToolRunRow key={task.task_id} task={task} now={now} showTool />)}
+        </ul>
+        {state.hasOlder ? (
+          <button type="button" onClick={() => void state.loadOlder()} disabled={state.loadingOlder} className="w-full border-t border-border py-2 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60">
+            {state.loadingOlder ? "Loading…" : "Load older runs"}
+          </button>
+        ) : (
+          <p className="border-t border-border py-2 text-center text-[11px] text-subtle">That&apos;s every stored run.</p>
+        )}
+      </div>
     </div>
   );
 }

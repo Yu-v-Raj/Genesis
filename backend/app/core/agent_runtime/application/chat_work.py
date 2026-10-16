@@ -22,6 +22,7 @@ from backend.app.core.core_services.persistence import PersistenceConflictError,
 from backend.app.core.execution_runtime.domain.execution import Execution
 from backend.app.core.execution_runtime.domain.execution_context import ExecutionContext
 from backend.app.core.execution_runtime.domain.work import RecoveryVerdict, WorkOutcome, WorkSuspended
+from backend.app.core.llm_runtime.domain.exceptions import error_category as llm_error_category
 from backend.app.core.llm_runtime.domain.exceptions import (
     LLMConfigurationError,
     LLMProviderError,
@@ -83,10 +84,8 @@ class ChatWorkHandler:
     def error_category(self, error: BaseException) -> str:
         if isinstance(error, (LLMConfigurationError, ProviderNotFoundError)):
             return "configuration"
-        if isinstance(error, LLMTimeoutError):
-            return "timeout"
-        if isinstance(error, LLMProviderError):
-            return "provider_error"
+        if isinstance(error, (LLMTimeoutError, LLMProviderError)):
+            return llm_error_category(error)  # timeout, rate_limited, provider_unavailable, ...
         if isinstance(error, AgentLifecycleError):
             return "agent_unavailable"
         if isinstance(error, (SessionNotFoundError, AgentNotFoundError, ValueError)):

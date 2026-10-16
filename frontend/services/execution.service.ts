@@ -26,7 +26,9 @@ function request<T>(endpoint: string, init: RequestInit = {}): Promise<T> {
 
 /** Typed transport adapter for the existing Genesis Execution Runtime API. */
 export const ExecutionService = Object.freeze({
-  list: (): Promise<ExecutionListResponse> => request<ExecutionListResponse>("/executions"),
+  /** Newest first; pass `before` (from `next_before`) for older executions. */
+  list: (before?: string | null): Promise<ExecutionListResponse> =>
+    request<ExecutionListResponse>(before ? `/executions?before=${encodeURIComponent(before)}` : "/executions"),
   get: (executionId: string): Promise<Execution> => request<Execution>(`/executions/${executionId}`),
   listForAgent: (agentId: string): Promise<ExecutionListResponse> =>
     request<ExecutionListResponse>(`/agents/${agentId}/executions`),

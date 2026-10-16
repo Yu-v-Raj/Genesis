@@ -11,6 +11,8 @@ from backend.app.core.agent_runtime.infrastructure import orm as _agent_orm  # n
 from backend.app.core.approval_gateway.infrastructure import orm as _approval_orm  # noqa: F401
 from backend.app.core.execution_runtime.infrastructure import orm as _execution_orm  # noqa: F401
 from backend.app.core.memory.infrastructure import orm as _memory_orm  # noqa: F401
+from backend.app.core.observability.infrastructure import orm as _observability_orm  # noqa: F401
+from backend.app.core.tool_runtime.infrastructure import orm as _tool_orm  # noqa: F401
 from backend.app.core.workflow_runtime.infrastructure import orm as _workflow_orm  # noqa: F401
 from backend.app.core.core_services.config.settings import settings
 from backend.app.database.base import Base

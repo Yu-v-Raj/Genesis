@@ -62,6 +62,8 @@ export interface ExecutionHistoryResponse {
 
 export interface ExecutionListResponse {
   executions: Execution[];
+  /** Pass as `before` to load older executions; an opaque cursor; `null` when there are none. */
+  next_before?: string | null;
 }
 
 export interface ExecuteAgentInput {

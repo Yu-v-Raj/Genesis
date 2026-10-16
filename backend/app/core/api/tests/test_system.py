@@ -41,6 +41,9 @@ def test_system_services_returns_registered_core_services(client: TestClient) ->
     assert [service["name"] for service in services] == [
         "EventBus",
         "EventHistory",
+        "RuntimeEventStore",
+        "DurableEventRecorder",
+        "OperationsQueryService",
         "WebSocketManager",
         "RealtimeGateway",
         "AgentRegistry",

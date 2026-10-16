@@ -151,6 +151,13 @@ class LLMCompleted(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class LLMRetrying(Event):
+    """Published when a transient provider failure will be retried after a delay."""
+
+    event_type: str = field(init=False, default="llm.retrying")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LLMFailed(Event):
     """Published when LLM generation fails without exposing prompts or secrets."""
 

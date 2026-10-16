@@ -81,7 +81,7 @@ export function hasActiveFilters(filters: ExecutionFilters): boolean {
 }
 
 /** The Operations URL query for a view; empty values are left out. */
-export function operationsQuery(view: Partial<ExecutionFilters> & { execution?: string | null; tab?: string | null }): string {
+export function operationsQuery(view: Partial<ExecutionFilters> & { execution?: string | null; run?: string | null; tab?: string | null }): string {
   const params = new URLSearchParams();
   if (view.tab && view.tab !== "executions") params.set("tab", view.tab);
   if (view.status && view.status !== "all") params.set("status", view.status);
@@ -89,6 +89,7 @@ export function operationsQuery(view: Partial<ExecutionFilters> & { execution?: 
   if (view.kind) params.set("kind", view.kind);
   if (view.query?.trim()) params.set("q", view.query.trim());
   if (view.execution) params.set("execution", view.execution);
+  if (view.run) params.set("run", view.run);
   const query = params.toString();
   return query ? `?${query}` : "";
 }
@@ -191,6 +192,10 @@ const ERROR_CATEGORIES: Readonly<Record<string, string>> = {
   configuration: "Configuration problem",
   timeout: "Timed out",
   provider_error: "Model provider error",
+  rate_limited: "Rate limited by the model provider",
+  provider_unavailable: "Model provider temporarily unavailable",
+  invalid_response: "Unreadable model response",
+  cancelled: "Cancelled",
   agent_unavailable: "Agent unavailable",
   invalid_request: "Invalid request",
   conflict: "Conflicting update",
@@ -210,6 +215,8 @@ const ERROR_EXPLANATIONS: Readonly<Record<string, string>> = {
   tool_denied:
     "The server's tool policy refused this call before the tool ran, so nothing was executed. For example, the tool isn't in the Agent's allowed tools, it's disabled, or its arguments were invalid or too large.",
   tool_failed: "The tool started running and then reported a failure.",
+  rate_limited: "The provider kept refusing requests for being over its rate limit or quota, so Genesis gave up after its retries. Try again later.",
+  provider_unavailable: "The provider was overloaded or unreachable on every attempt. Retries only repeat the model request; no tool ran twice.",
 };
 
 export function errorCategoryExplanation(category: string | null | undefined): string | null {

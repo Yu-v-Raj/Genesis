@@ -103,7 +103,8 @@ class GeminiProvider(LLMProvider):
                     ) from error
                 self._client = genai.Client(
                     api_key=self._api_key,
-                    http_options={"timeout": int(self._timeout * 1000)},
+                    # One attempt per call: the LLM Runtime owns retries.
+                    http_options={"timeout": int(self._timeout * 1000), "retry_options": {"attempts": 1}},
                 )
         return self._client
 

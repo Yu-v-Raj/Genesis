@@ -287,22 +287,24 @@ async def test_a_workflow_context_only_runs_exactly_its_running_step() -> None:
     runtime = await Runtime().setup()
     workflows = await workflow_runtime(runtime)
     run = await workflows.create(name="held", tasks=(step("hold", "spy_hold", "stored"),))
-    context = WorkflowToolContext(workflow_id=run.workflow_id, step_id="hold", attempt=1)
+    context = WorkflowToolContext(workflow_id=run.workflow_id, step_id="hold", attempt=1, lease_owner="local")
 
     not_started = await denied(runtime, "spy_hold", context, {"value": "stored"})
     await workflows.start(run.workflow_id)
     await runtime.held.wait()  # the real step is now running
     other_tool = await denied(runtime, "spy", context, {"value": "stored"})
     other_arguments = await denied(runtime, "spy_hold", context, {"value": "changed"})
-    stale_attempt = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=run.workflow_id, step_id="hold", attempt=2), {"value": "stored"})
-    no_step = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=run.workflow_id, step_id="nope", attempt=1))
-    no_run = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=uuid4(), step_id="hold", attempt=1))
+    stale_attempt = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=run.workflow_id, step_id="hold", attempt=2, lease_owner="local"), {"value": "stored"})
+    no_step = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=run.workflow_id, step_id="nope", attempt=1, lease_owner="local"))
+    no_run = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=uuid4(), step_id="hold", attempt=1, lease_owner="local"))
+    other_worker = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=run.workflow_id, step_id="hold", attempt=1, lease_owner="stale-worker"), {"value": "stored"})
 
     assert not_started.reason is DenialReason.STEP_NOT_RUNNING
     assert other_tool.reason is DenialReason.STEP_MISMATCH
     assert other_arguments.reason is DenialReason.STEP_MISMATCH
     assert stale_attempt.reason is DenialReason.STEP_NOT_RUNNING
     assert no_step.reason is no_run.reason is DenialReason.STEP_NOT_FOUND
+    assert other_worker.reason is DenialReason.LEASE_NOT_HELD  # a worker that lost the run's lease
     assert runtime.calls == Counter({"spy_hold": 1})  # only the real step
 
     runtime.hold.set()
@@ -323,7 +325,7 @@ async def test_a_cancelled_run_cannot_start_a_step_tool_and_cancellation_still_t
         if runtime.tools.history()[0].status.value != "running":
             break
         await asyncio.sleep(0.01)
-    late = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=run.workflow_id, step_id="hold", attempt=1), {"value": "v"})
+    late = await denied(runtime, "spy_hold", WorkflowToolContext(workflow_id=run.workflow_id, step_id="hold", attempt=1, lease_owner="local"), {"value": "v"})
 
     (task,) = runtime.tools.history()
     assert task.status.value == "failed" and task.result is not None and task.result.metadata["cancelled"] is True
@@ -589,7 +591,7 @@ class StoredStep:
 
     async def workflow_step_grant(self, workflow_id, step_id):
         from backend.app.core.tool_runtime.application.authorization_policy import WorkflowStepGrant
-        return WorkflowStepGrant(tool_name="counter", arguments={"count": 1}, running=True, attempt=1)
+        return WorkflowStepGrant(tool_name="counter", arguments={"count": 1}, running=True, attempt=1, lease_owner="local")
 
 
 @pytest.mark.asyncio
@@ -603,7 +605,7 @@ async def test_workflow_step_arguments_must_match_exactly_not_by_python_equality
         handler=runtime._handler("counter"),
     ))
     runtime.tools.bind_workflow_steps(StoredStep())
-    context = WorkflowToolContext(workflow_id=uuid4(), step_id="s", attempt=1)
+    context = WorkflowToolContext(workflow_id=uuid4(), step_id="s", attempt=1, lease_owner="local")
     policy_check = runtime.tools.authorize
 
     as_float = await policy_check(tool_name="counter", arguments={"count": 1.0}, context=context)
@@ -662,12 +664,12 @@ async def test_a_stale_attempt_or_duplicate_worker_cannot_use_a_step_approval() 
 
         async def workflow_step_grant(self, workflow_id, step_id):
             from backend.app.core.tool_runtime.application.authorization_policy import WorkflowStepGrant
-            return WorkflowStepGrant(tool_name="spy_side_effects", arguments={"value": "x"}, running=True, attempt=self.attempt)
+            return WorkflowStepGrant(tool_name="spy_side_effects", arguments={"value": "x"}, running=True, attempt=self.attempt, lease_owner="local")
 
     step = RunningStep()
     runtime.tools.bind_workflow_steps(step)
     workflow_id = uuid4()
-    first = WorkflowToolContext(workflow_id=workflow_id, step_id="s", attempt=1)
+    first = WorkflowToolContext(workflow_id=workflow_id, step_id="s", attempt=1, lease_owner="local")
     held = await denied(runtime, "spy_side_effects", first)
     await approvals.approve(held.approval_id, source=LOCAL)
 
@@ -681,7 +683,7 @@ async def test_a_stale_attempt_or_duplicate_worker_cannot_use_a_step_approval() 
 
     # A later attempt of the same step is a different operation: it needs its own decision.
     step.attempt = 2
-    later = await denied(runtime, "spy_side_effects", WorkflowToolContext(workflow_id=workflow_id, step_id="s", attempt=2))
+    later = await denied(runtime, "spy_side_effects", WorkflowToolContext(workflow_id=workflow_id, step_id="s", attempt=2, lease_owner="local"))
     stale = await denied(runtime, "spy_side_effects", first)
     assert later.outcome is AuthorizationOutcome.APPROVAL_REQUIRED and later.approval_id != held.approval_id
     assert stale.reason is DenialReason.STEP_NOT_RUNNING
@@ -703,7 +705,7 @@ async def test_oversized_arguments_are_refused_on_every_path_before_anything_hap
         ("spy", AgentToolContext(agent_id=agent.id)),
         ("spy_side_effects", AgentToolContext(agent_id=agent.id)),  # would otherwise open a request
         ("spy_side_effects", OPERATOR),
-        ("spy_side_effects", WorkflowToolContext(workflow_id=uuid4(), step_id="s", attempt=1)),
+        ("spy_side_effects", WorkflowToolContext(workflow_id=uuid4(), step_id="s", attempt=1, lease_owner="local")),
     ):
         decision = await denied(runtime, tool_name, context, huge)
         assert decision.reason is DenialReason.ARGUMENTS_TOO_LARGE and decision.outcome is AuthorizationOutcome.INVALID_REQUEST

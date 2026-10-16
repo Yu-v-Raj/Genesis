@@ -161,6 +161,11 @@ class ApprovalService:
         await self.expire_due()
         return await self._repository.list(states, limit)
 
+    async def related(self, *, execution_id: UUID | None = None, workflow_id: UUID | None = None, limit: int = 200) -> tuple[Approval, ...]:
+        """Requests of one execution or workflow run, as stored: reading never changes them
+        (a pending request past its deadline is shown with its ``expires_at``)."""
+        return await self._repository.related(execution_id=execution_id, workflow_id=workflow_id, limit=limit)
+
     async def expire_due(self) -> int:
         expired = 0
         for item in await self._repository.due_for_expiry(self._clock()):

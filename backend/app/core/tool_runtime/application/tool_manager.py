@@ -6,7 +6,10 @@ from collections.abc import Mapping
 from threading import RLock
 from uuid import UUID
 
-from backend.app.core.approval_gateway.domain.approval import ApprovalGateway, ApprovalOutcome, ApprovalState
+from backend.app.core.approval_gateway.domain.approval import ApprovalGateway, ApprovalOutcome, ApprovalState, redact_arguments
+from backend.app.core.core_services.logging.logger import logger
+from backend.app.core.core_services.pagination import PageCursor, comes_after, newest_first
+from backend.app.core.tool_runtime.application.task_repository import TaskQuery, ToolTaskRepository, matches
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.observability.domain.events import TaskCompleted, TaskCreated, TaskFailed, ToolRejected
 from backend.app.core.tool_runtime.application.authorization_policy import (
@@ -36,6 +39,7 @@ from backend.app.core.tool_runtime.domain.tool_status import ToolResultStatus
 # metadata (caller, Agent/workflow identifiers, approval_id) is written by the server from
 # the authorization context and decision, so a caller can't forge any of them.
 CALLER_METADATA_KEY = "caller_metadata"
+INTERRUPTED_TASK_MESSAGE = "Genesis stopped while this tool was running, so its outcome is unknown. It was not re-run."
 
 
 class ToolRuntimeManager:
@@ -53,6 +57,7 @@ class ToolRuntimeManager:
         history_size: int = 1000,
         *,
         approvals: ApprovalGateway | None = None,
+        tasks: ToolTaskRepository | None = None,
     ) -> None:
         if history_size < 1:
             raise ValueError("Tool history size must be positive.")
@@ -60,6 +65,9 @@ class ToolRuntimeManager:
         self._executor = executor
         self._event_bus = event_bus
         self._approvals = approvals
+        # Durable task history (database in the application); the in-memory cache below
+        # only serves this process's ``history()``.
+        self._task_store = tasks
         self._policy = ToolAuthorizationPolicy(registry, approvals=approvals)
         self._history_size = history_size
         self._tasks: dict[UUID, Task] = {}
@@ -134,16 +142,27 @@ class ToolRuntimeManager:
             trusted[CALLER_METADATA_KEY] = dict(metadata)
         metadata = trusted
         execution_id = getattr(context, "execution_id", None)
+        shown, _ = redact_arguments(arguments)
         task = Task(
             execution_id=execution_id,
             tool_name=tool_name,
             metadata=metadata,
+            tool_version=self._tool_version(tool_name),
+            arguments=shown,
         )
         self._save(task)
         running = task
         try:
-            await self._publish(TaskCreated, task)
             running = task.with_updates(status=TaskStatus.RUNNING, started_at=utc_now())
+            # Durable before effect: if the task can't be recorded, the tool doesn't run.
+            try:
+                await self._persist(running, required=True)
+            except Exception:
+                self._save(running.with_updates(status=TaskStatus.FAILED, finished_at=utc_now(), result=ToolResult(status=ToolResultStatus.FAILED, error="Not run: the task could not be recorded.")))
+                if approval_id is not None:
+                    await self._record_approval_outcome(approval_id, task.task_id, ApprovalOutcome.FAILED, "Not run: the task could not be recorded.")
+                raise
+            await self._publish(TaskCreated, task)
             self._save(running)
             result = await self._executor.execute(
                 ToolRequest(
@@ -164,6 +183,7 @@ class ToolRuntimeManager:
         status = TaskStatus.COMPLETED if result.status is ToolResultStatus.COMPLETED else TaskStatus.FAILED
         completed = running.with_updates(status=status, finished_at=utc_now(), result=result)
         self._save(completed)
+        await self._persist(completed)
         if approval_id is not None:
             await self._record_approval_outcome(
                 approval_id,
@@ -181,6 +201,66 @@ class ToolRuntimeManager:
             await self._approvals.record_outcome(approval_id, task_id=task_id, outcome=outcome, detail=detail)
         except (Exception, asyncio.CancelledError):
             pass  # the task snapshot is authoritative; the approval keeps "outcome unknown"
+
+    # ------------------------------------------------------------- durable history
+
+    async def _persist(self, task: Task, *, required: bool = False) -> None:
+        if self._task_store is None:
+            return
+        try:
+            await self._task_store.save(task)
+        except Exception as error:
+            if required:
+                raise
+            # The effect already happened; keep going, but say the history is incomplete.
+            logger.error("Tool task history could not be saved", extra={"genesis_context": {"task_id": str(task.task_id), "error_type": type(error).__name__}})
+
+    def _tool_version(self, tool_name: str) -> str | None:
+        try:
+            return self._registry.get(tool_name).definition.version
+        except Exception:
+            return None
+
+    async def task_page(self, query: TaskQuery, *, before: PageCursor | None = None, limit: int = 50) -> tuple[Task, ...]:
+        """Durable task history, newest first (this process's cache without a store)."""
+        if self._task_store is not None:
+            return await self._task_store.page(query, before=before, limit=limit)
+        ordered = newest_first(self.history(), lambda task: task.created_at, lambda task: task.task_id)
+        return tuple(t for t in ordered if comes_after(t.created_at, t.task_id, before) and matches(t, query))[:limit]
+
+    async def get_task(self, task_id: UUID) -> Task | None:
+        if self._task_store is not None:
+            return await self._task_store.get(task_id)
+        return next((task for task in self.history() if task.task_id == task_id), None)
+
+    async def recover_unfinished(self) -> int:
+        """Close tasks a previous process left pending or running: their effect is unknown,
+        so they are recorded as failed with ``interrupted`` and never re-run."""
+        if self._task_store is None:
+            return 0
+        closed = 0
+        for task in await self._task_store.unfinished():
+            finished_at = utc_now()
+            interrupted = task.with_updates(
+                status=TaskStatus.FAILED,
+                finished_at=finished_at,
+                result=ToolResult(
+                    status=ToolResultStatus.FAILED,
+                    error=INTERRUPTED_TASK_MESSAGE,
+                    metadata={"interrupted": True},
+                    duration=0.0 if task.started_at is None else max((finished_at - task.started_at).total_seconds(), 0.0),
+                ),
+            )
+            await self._task_store.save(interrupted)
+            approval = task.metadata.get("approval_id")
+            if isinstance(approval, str):
+                try:
+                    await self._record_approval_outcome(UUID(approval), task.task_id, ApprovalOutcome.UNKNOWN, INTERRUPTED_TASK_MESSAGE)
+                except ValueError:
+                    pass
+            await self._publish(TaskFailed, interrupted)
+            closed += 1
+        return closed
 
     # ------------------------------------------------------------ approval helpers
 
@@ -208,6 +288,7 @@ class ToolRuntimeManager:
         )
         self._save(cancelled)
         try:
+            await self._persist(cancelled)
             await self._publish(TaskFailed, cancelled)
         except asyncio.CancelledError:
             pass  # the snapshot is saved; a repeated cancel must not mask the original one

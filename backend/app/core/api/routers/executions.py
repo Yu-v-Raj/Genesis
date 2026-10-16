@@ -3,10 +3,12 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.app.core.agent_runtime.domain.exceptions import AgentNotFoundError
 from backend.app.core.api.dependencies.system import get_execution_manager
+from backend.app.core.api.pagination import BeforeCursor, page_cursor
+from backend.app.core.core_services.pagination import next_cursor
 from backend.app.core.api.schemas.executions import (
     ExecutionCreateRequest,
     ExecutionHistoryResponse,
@@ -54,9 +56,17 @@ async def execute_agent(
 
 
 @router.get("/api/executions", response_model=ExecutionListResponse)
-async def list_executions(manager: ExecutionManagerDependency) -> ExecutionListResponse:
+async def list_executions(
+    manager: ExecutionManagerDependency,
+    before: BeforeCursor = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> ExecutionListResponse:
     """Return recent executions, newest first."""
-    return ExecutionListResponse(executions=[_response(manager, item) for item in await manager.list_executions()])
+    page = await manager.list_executions(before=page_cursor(before), limit=limit + 1)
+    return ExecutionListResponse(
+        executions=[_response(manager, item) for item in page[:limit]],
+        next_before=next_cursor(page, limit, lambda item: item.created_at, lambda item: item.execution_id),
+    )
 
 
 @router.get("/api/executions/{execution_id}", response_model=ExecutionResponse)

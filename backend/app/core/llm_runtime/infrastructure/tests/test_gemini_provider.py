@@ -9,7 +9,7 @@ from backend.app.core.core_services.config.settings import Settings
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.application.provider_registry import LLMProviderRegistry
-from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError, LLMProviderError, LLMTimeoutError
+from backend.app.core.llm_runtime.domain.exceptions import LLMConfigurationError, LLMProviderError, LLMTimeoutError, LLMTransientError
 from backend.app.core.llm_runtime.domain.models import (
     GenerationConfig,
     LLMModel,
@@ -344,7 +344,8 @@ class ReadTimeout(Exception):
         (StatusError(403), LLMConfigurationError, "GEMINI_API_KEY"),
         (StatusError(404), LLMConfigurationError, "is not available"),
         (StatusError(429), LLMProviderError, "rate limit or quota"),
-        (StatusError(500), LLMProviderError, "Gemini generation failed."),
+        (StatusError(500), LLMTransientError, "temporarily unavailable (HTTP 500)"),
+        (StatusError(400), LLMProviderError, "refused the request (HTTP 400)"),
         (ReadTimeout("read timed out"), LLMTimeoutError, "did not respond in time"),
     ],
 )

@@ -42,7 +42,11 @@ from backend.app.core.observability.domain.events import (
     SystemStarted,
     SystemStopped,
 )
+from backend.app.core.observability.application.durable_event_recorder import DurableEventRecorder
+from backend.app.core.observability.application.operations_query import OperationsQueryService
+from backend.app.core.observability.application.runtime_event_store import RuntimeEventStore
 from backend.app.core.observability.infrastructure.event_history import EventHistory
+from backend.app.core.observability.infrastructure.sqlalchemy_event_store import SqlAlchemyRuntimeEventStore
 from backend.app.core.plugin_system.application.plugin_manager import PluginManager
 from backend.app.core.realtime.application.gateway import RealtimeGateway
 from backend.app.core.realtime.application.websocket_manager import WebSocketManager
@@ -52,11 +56,12 @@ from backend.app.core.tool_runtime.application.tool_executor import ToolExecutor
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
 from backend.app.core.tool_runtime.domain.tool import builtin_tools
+from backend.app.core.tool_runtime.infrastructure.sqlalchemy_repository import SqlAlchemyToolTaskRepository
 from backend.app.core.workflow_engine.application.workflow_engine import WorkflowEngine
 from backend.app.core.workflow_runtime.application.repositories import WorkflowRepository
 from backend.app.core.workflow_runtime.application.workflow_manager import WorkflowManager
 from backend.app.core.workflow_runtime.infrastructure.sqlalchemy_repository import SqlAlchemyWorkflowRepository
-from backend.app.core.llm_runtime.application.llm_manager import LLMManager
+from backend.app.core.llm_runtime.application.llm_manager import LLMManager, RetryPolicy
 from backend.app.core.llm_runtime.application.provider_registry import LLMProviderRegistry
 from backend.app.core.llm_runtime.infrastructure.openai_provider import OpenAIProvider
 from backend.app.core.llm_runtime.infrastructure.gemini_provider import GeminiProvider
@@ -78,6 +83,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry = ServiceRegistry()
     event_bus = EventBus()
     event_history = EventHistory(settings.EVENT_HISTORY_SIZE)
+    runtime_event_store = SqlAlchemyRuntimeEventStore(session_factory)
+    event_recorder = DurableEventRecorder(runtime_event_store, retention_days=settings.RUNTIME_EVENT_RETENTION_DAYS)
     websocket_manager = WebSocketManager()
     realtime_gateway = RealtimeGateway(websocket_manager)
     agent_registry = AgentRegistry(event_bus, SqlAlchemyAgentRepository(session_factory))
@@ -104,7 +111,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     approval_service = ApprovalService(
         SqlAlchemyApprovalRepository(session_factory), event_bus, ttl_seconds=settings.APPROVAL_TTL_SECONDS
     )
-    tool_runtime_manager = ToolRuntimeManager(tool_registry, tool_executor, event_bus, approvals=approval_service)
+    tool_runtime_manager = ToolRuntimeManager(
+        tool_registry, tool_executor, event_bus, approvals=approval_service, tasks=SqlAlchemyToolTaskRepository(session_factory)
+    )
     for tool in builtin_tools():
         await tool_runtime_manager.register(tool)
     execution_executor.set_tool_manager(tool_runtime_manager)
@@ -127,7 +136,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     llm_provider_registry = LLMProviderRegistry()
     llm_provider_registry.register(OpenAIProvider(settings))
     llm_provider_registry.register(GeminiProvider(settings))
-    llm_manager = LLMManager(llm_provider_registry, event_bus)
+    llm_manager = LLMManager(llm_provider_registry, event_bus, retry=RetryPolicy.from_settings(settings))
     agent_interaction_service = AgentInteractionService(
         agent_registry,
         agent_manager,
@@ -151,10 +160,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         interval_seconds=settings.HEARTBEAT_INTERVAL_SECONDS,
     )
 
+    operations_query = OperationsQueryService(
+        executions=execution_manager,
+        workflows=workflow_manager,
+        tools=tool_runtime_manager,
+        approvals=approval_service,
+        events=runtime_event_store,
+    )
+
     event_bus.subscribe(event_history.record)
+    event_bus.subscribe(event_recorder.record)
     event_bus.subscribe(realtime_gateway.broadcast_event)
     service_registry.register_singleton(EventBus, event_bus)
     service_registry.register_singleton(EventHistory, event_history)
+    service_registry.register_singleton(RuntimeEventStore, runtime_event_store)
+    service_registry.register_singleton(DurableEventRecorder, event_recorder)
+    service_registry.register_singleton(OperationsQueryService, operations_query)
     service_registry.register_singleton(WebSocketManager, websocket_manager)
     service_registry.register_singleton(RealtimeGateway, realtime_gateway)
     service_registry.register_singleton(AgentRegistry, agent_registry)
@@ -186,6 +207,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for service_name in (
         "EventBus",
         "EventHistory",
+        "RuntimeEventStore",
+        "DurableEventRecorder",
+        "OperationsQueryService",
         "WebSocketManager",
         "RealtimeGateway",
         "AgentRegistry",
@@ -216,8 +240,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             ServiceRegistered(source="bootstrap", payload={"service": service_name})
         )
 
+    await event_recorder.start()
     await agent_manager.restore_agents()
-    # Resolve work left by a previous process, then start claiming queued work.
+    # Resolve work left by a previous process, then start claiming queued work. Tool tasks
+    # a crash left running are closed first (outcome unknown, never re-run).
+    await tool_runtime_manager.recover_unfinished()
     await execution_manager.start()
     await workflow_manager.start_worker()
     await runtime_manager.startup()
@@ -233,6 +260,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await runtime_manager.shutdown()
         await event_bus.publish(SystemStopped(source="runtime"))
         await logger_service.info("Genesis application shutdown", source="runtime")
+        await event_recorder.stop()
         await database_engine.dispose()
 
 

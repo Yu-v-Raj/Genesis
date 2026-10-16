@@ -40,7 +40,8 @@ class OpenAIProvider(LLMProvider):
         except ImportError as error:
             raise LLMConfigurationError("OpenAI support requires the optional 'openai' package.") from error
         try:
-            client = AsyncOpenAI(api_key=self._api_key, timeout=self._timeout)
+            # Retries are owned by the LLM Runtime (bounded, observable), not hidden in the SDK.
+            client = AsyncOpenAI(api_key=self._api_key, timeout=self._timeout, max_retries=0)
             completion = await client.chat.completions.create(
                 model=request.model.model_name,
                 messages=self._messages_payload(request),

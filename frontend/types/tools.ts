@@ -30,10 +30,26 @@ export interface ToolTask {
   finished_at: string | null;
   metadata: Record<string, unknown>;
   result: ToolResult | null;
+  created_at?: string | null;
+  tool_version?: string | null;
+  /** A display copy with secret-looking fields replaced; never the raw arguments. */
+  arguments?: Record<string, unknown>;
 }
 
 export interface ToolListResponse { tools: ToolDefinition[]; }
-export interface ToolHistoryResponse { tasks: ToolTask[]; }
+export interface ToolHistoryResponse {
+  /** Newest first, from durable history. */
+  tasks: ToolTask[];
+  /** Pass as `before` to load older runs; an opaque cursor; `null` when there are none. */
+  next_before?: string | null;
+}
+export interface ToolHistoryQuery {
+  before?: string | null;
+  limit?: number;
+  tool_name?: string | null;
+  execution_id?: string | null;
+  workflow_id?: string | null;
+}
 export interface ToolCapabilitiesResponse { capabilities: string[]; }
 export interface ToolExecutionInput {
   tool_name: string;

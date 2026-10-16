@@ -60,6 +60,7 @@ MESSAGES: Mapping[DenialReason, str] = MappingProxyType({
     DenialReason.STEP_NOT_FOUND: "This workflow step doesn't exist.",
     DenialReason.STEP_NOT_RUNNING: "This workflow step isn't running, so it can't call a tool.",
     DenialReason.STEP_MISMATCH: "The tool call doesn't match what this workflow step defines.",
+    DenialReason.LEASE_NOT_HELD: "Another worker now owns this workflow run, so this one can't run its step.",
     DenialReason.PERMISSION_UNENFORCEABLE: "This tool requires permissions Genesis can't check yet, so it can't run.",
     DenialReason.INVALID_ARGUMENTS: "The tool arguments are invalid.",
     DenialReason.ARGUMENTS_TOO_LARGE: "The tool arguments are too large.",
@@ -94,6 +95,7 @@ class WorkflowStepGrant:
     arguments: Mapping[str, object] = field(default_factory=dict)
     running: bool
     attempt: int
+    lease_owner: str | None
 
 
 class WorkflowStepGrants(Protocol):
@@ -180,6 +182,8 @@ class ToolAuthorizationPolicy:
                 return DenialReason.STEP_NOT_FOUND
             if not step.running or step.attempt != context.attempt:
                 return DenialReason.STEP_NOT_RUNNING
+            if step.lease_owner != context.lease_owner:
+                return DenialReason.LEASE_NOT_HELD
             if step.tool_name != tool_name or not _same_arguments(step.arguments, arguments):
                 return DenialReason.STEP_MISMATCH
             return None

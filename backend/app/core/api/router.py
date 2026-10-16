@@ -13,6 +13,7 @@ from backend.app.core.api.routers.system import router as system_router
 from backend.app.core.api.routers.memory import router as memory_router
 from backend.app.core.api.routers.workflows import router as workflows_router
 from backend.app.core.api.routers.llm import router as llm_router
+from backend.app.core.api.routers.operations import router as operations_router
 
 
 api_router = APIRouter()
@@ -27,3 +28,4 @@ api_router.include_router(memory_router)
 api_router.include_router(workflows_router)
 api_router.include_router(llm_router)
 api_router.include_router(approvals_router)
+api_router.include_router(operations_router)

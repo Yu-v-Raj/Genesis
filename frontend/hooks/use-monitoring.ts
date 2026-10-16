@@ -20,6 +20,8 @@ export interface MonitoringData {
   tools: ToolApiItem[];
   agents: Agent[];
   executions: Execution[];
+  /** Pass to ExecutionService.list to load executions older than the newest page. */
+  executionsNextBefore: string | null;
   events: RealtimeEvent[];
   /** `null` when the plugin list could not be loaded; it is optional for this view. */
   plugins: PluginApiItem[] | null;
@@ -78,6 +80,7 @@ export function useMonitoring({ eventLimit = 100 }: MonitoringOptions = {}): {
         tools: tools.tools,
         agents: agents.agents,
         executions: executions.executions,
+        executionsNextBefore: executions.next_before ?? null,
         events: history.events,
         plugins,
         lastHeartbeat: heartbeat?.timestamp ?? null,
@@ -108,7 +111,7 @@ export function useMonitoring({ eventLimit = 100 }: MonitoringOptions = {}): {
     }));
     if (latestEvent.event_type.startsWith("agent.") || latestEvent.event_type.startsWith("execution.")) {
       void Promise.all([AgentService.list(), ExecutionService.list()])
-        .then(([agents, executions]) => setData((current) => current === null ? current : { ...current, agents: agents.agents, executions: executions.executions }))
+        .then(([agents, executions]) => setData((current) => current === null ? current : { ...current, agents: agents.agents, executions: executions.executions, executionsNextBefore: executions.next_before ?? null }))
         .catch(() => undefined);
     }
     if (latestEvent.event_type === "service.registered" || latestEvent.event_type === "service.removed") {

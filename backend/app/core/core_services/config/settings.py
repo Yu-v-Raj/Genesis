@@ -56,12 +56,21 @@ class Settings(BaseSettings):
     AGENT_CONTEXT_MAX_TURNS: int = Field(default=20, ge=1)
     # How long an approval request stays valid (pending, or approved but not yet used).
     APPROVAL_TTL_SECONDS: float = Field(default=3600.0, gt=0)
+    # How long durable runtime events (execution, workflow, tool, approval and model-call
+    # events) are kept in the database. Older ones are deleted at startup and hourly.
+    RUNTIME_EVENT_RETENTION_DAYS: float = Field(default=30.0, gt=0)
     OPENAI_API_KEY: SecretStr | None = None
     OPENAI_MODEL: str = "gpt-4.1-mini"
     OPENAI_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)
     GEMINI_API_KEY: SecretStr | None = None
     GEMINI_MODEL: str = "gemini-3.6-flash"
     GEMINI_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)
+    # Model requests (any provider): attempts per request (1 = no retry), backoff between
+    # retries of transient failures, and an overall deadline covering all attempts and waits.
+    LLM_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=5)
+    LLM_RETRY_BASE_DELAY_SECONDS: float = Field(default=0.5, ge=0, le=10)
+    LLM_RETRY_MAX_DELAY_SECONDS: float = Field(default=8.0, ge=0, le=60)
+    LLM_TOTAL_TIMEOUT_SECONDS: float = Field(default=120.0, gt=0, le=600)
     ANTHROPIC_API_KEY: SecretStr | None = None
 
     @field_validator("DATABASE_URL")

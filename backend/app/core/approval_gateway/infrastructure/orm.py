@@ -24,6 +24,8 @@ class ApprovalRow(Base):
         CheckConstraint(f"outcome IS NULL OR outcome IN {APPROVAL_OUTCOMES}", name="outcome"),
         CheckConstraint("version >= 1", name="version_positive"),
         Index("ix_approvals_state_created_at", "state", "created_at"),
+        Index("ix_approvals_execution_id", "execution_id"),
+        Index("ix_approvals_workflow_id", "workflow_id"),
         Index(
             "uq_approvals_active_operation",
             "operation_digest",
@@ -37,6 +39,9 @@ class ApprovalRow(Base):
     state: Mapped[str] = mapped_column(String(16))
     caller: Mapped[str] = mapped_column(String(16))
     subject: Mapped[dict[str, object]] = mapped_column(JSONType)
+    # Copied from ``subject`` when the request is stored, so a trace can find them by index.
+    execution_id: Mapped[UUID | None] = mapped_column(Uuid)
+    workflow_id: Mapped[UUID | None] = mapped_column(Uuid)
     tool_name: Mapped[str] = mapped_column(String(200))
     tool_version: Mapped[str] = mapped_column(String(64))
     tool_contract: Mapped[str] = mapped_column(String(64))

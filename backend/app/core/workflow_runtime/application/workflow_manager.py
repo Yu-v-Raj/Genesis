@@ -27,6 +27,7 @@ from uuid import UUID
 
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.core_services.logging.logger import logger
+from backend.app.core.core_services.pagination import PageCursor
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.tool_runtime.application.authorization_policy import WorkflowStepGrant
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
@@ -58,6 +59,7 @@ from backend.app.core.workflow_runtime.domain.models import (
     WorkflowTaskStatus,
     utc_now,
 )
+from backend.app.core.workflow_runtime.domain.transition import WorkflowTransition
 
 
 INTERRUPTED_RUN_MESSAGE = (
@@ -123,6 +125,7 @@ class WorkflowManager:
             arguments=arguments if isinstance(arguments, Mapping) else {},
             running=step.status is WorkflowTaskStatus.RUNNING,
             attempt=run.attempt,
+            lease_owner=run.lease_owner,
         )
 
     # ---------------------------------------------------------------- definitions
@@ -245,9 +248,7 @@ class WorkflowManager:
         if approval_state is None:
             return ()
         resumed: list[Workflow] = []
-        for run in await self._repository.list_runs():
-            if run.status is not WorkflowStatus.WAITING_APPROVAL:
-                continue
+        for run in await self._repository.runs_with_status((WorkflowStatus.WAITING_APPROVAL,)):
             decided: dict[str, ApprovalState | None] = {}
             for task in run.tasks:
                 if task.status is WorkflowTaskStatus.WAITING_APPROVAL:
@@ -348,11 +349,17 @@ class WorkflowManager:
             raise WorkflowNotFoundError(f"Workflow {workflow_id} was not found.")
         return run
 
-    async def list(self) -> tuple[Workflow, ...]:
-        return await self._repository.list_runs()
+    async def list(self, *, before: PageCursor | None = None, limit: int = 200) -> tuple[Workflow, ...]:
+        """Runs newest first; ``before`` continues after that page cursor."""
+        return await self._repository.list_runs(limit, before=before)
 
     async def history(self, workflow_id: UUID) -> tuple[WorkflowTask, ...]:
         return (await self.get(workflow_id)).tasks
+
+    async def transitions(self, workflow_id: UUID) -> tuple[WorkflowTransition, ...]:
+        """The run's durable timeline: every run and step status change, oldest first."""
+        await self.get(workflow_id)
+        return await self._repository.history(workflow_id)
 
     # --------------------------------------------------------- worker / recovery
 
@@ -506,6 +513,7 @@ class WorkflowManager:
         async with self._lock:
             workflow = await self.get(workflow_id); task = self._task(workflow, task_id)
             if workflow.status is not WorkflowStatus.RUNNING or task.status is not WorkflowTaskStatus.READY: return
+            if workflow.lease_owner != self._worker_id: return  # the lease moved to another worker
             task = task.with_updates(status=WorkflowTaskStatus.RUNNING, started_at=utc_now())
             # Checkpoint: stored as RUNNING before the tool can have any effect.
             workflow = await self._save(workflow, workflow.with_task(task))
@@ -514,7 +522,7 @@ class WorkflowManager:
             result = await self._tools.execute(
                 tool_name=str(task.configuration["tool_name"]),
                 arguments=task.configuration.get("tool_arguments", {}),
-                context=WorkflowToolContext(workflow_id=workflow_id, step_id=task_id, attempt=workflow.attempt),
+                context=WorkflowToolContext(workflow_id=workflow_id, step_id=task_id, attempt=workflow.attempt, lease_owner=self._worker_id),
             )
             successful = result.status is TaskStatus.COMPLETED
             updated = task.with_updates(status=WorkflowTaskStatus.COMPLETED if successful else WorkflowTaskStatus.FAILED, result=result.result.output if result.result else None, error=None if successful else (result.result.error if result.result else "Tool task failed"), finished_at=utc_now())
@@ -533,6 +541,14 @@ class WorkflowManager:
             workflow = await self.get(workflow_id)
             if workflow.status not in {WorkflowStatus.RUNNING, WorkflowStatus.PAUSED}:
                 return  # cancelled or recovered meanwhile
+            if workflow.lease_owner != self._worker_id or self._task(workflow, task_id).status is not WorkflowTaskStatus.RUNNING:
+                # This worker lost the run (its lease expired and recovery or another worker
+                # took over). The newer owner's state wins; the tool task keeps this outcome.
+                logger.warning(
+                    "Workflow step result discarded: the run's lease is held elsewhere",
+                    extra={"genesis_context": {"workflow_id": str(workflow_id), "step_id": task_id}},
+                )
+                return
             workflow = await self._save(workflow, workflow.with_task(updated))
         await self._publish(_STEP_EVENTS.get(updated.status, "workflow.task.failed"), workflow, updated)
 

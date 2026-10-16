@@ -14,6 +14,7 @@ from backend.app.core.agent_runtime.application.agent_interaction_service import
 from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.memory.application.memory_manager import MemoryManager
+from backend.app.core.observability.application.operations_query import OperationsQueryService
 from backend.app.core.observability.infrastructure.event_history import EventHistory
 from backend.app.core.plugin_system.application.plugin_manager import PluginManager
 from backend.app.core.realtime.application.websocket_manager import WebSocketManager
@@ -139,3 +140,10 @@ def get_approval_service(
 ) -> ApprovalService:
     """Resolve the Approval Gateway service."""
     return registry.resolve(ApprovalService)
+
+
+def get_operations_query(
+    registry: ServiceRegistry = Depends(get_service_registry),
+) -> OperationsQueryService:
+    """Resolve the app-scoped, read-only Operations query service."""
+    return registry.resolve(OperationsQueryService)

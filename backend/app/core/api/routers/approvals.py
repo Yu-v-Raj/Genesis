@@ -63,14 +63,14 @@ async def list_approvals(
     items = await approvals.list(states=frozenset(state) if state else None, limit=limit)
     pending = await approvals.list(states=frozenset({ApprovalState.PENDING}), limit=500)
     return ApprovalListResponse(
-        approvals=[await _response(item, tools, agents, workflows) for item in items],
+        approvals=[await approval_response(item, tools, agents, workflows) for item in items],
         pending_count=len(pending),
     )
 
 
 @router.get("/{approval_id}", response_model=ApprovalResponse)
 async def get_approval(approval_id: UUID, approvals: Approvals, tools: Tools, agents: Agents, workflows: Workflows) -> ApprovalResponse:
-    return await _response(await _get(approvals, approval_id), tools, agents, workflows)
+    return await approval_response(await _get(approvals, approval_id), tools, agents, workflows)
 
 
 @router.post("/{approval_id}/approve", response_model=ApprovalActionResponse)
@@ -171,13 +171,13 @@ async def _action(
 ) -> ApprovalActionResponse:
     stored = await approvals.get(approval_id)
     return ApprovalActionResponse(
-        approval=await _response(stored, tools, agents, workflows),
+        approval=await approval_response(stored, tools, agents, workflows),
         task=None if task is None else TaskResponse.from_task(task),
         problem=problem,
     )
 
 
-async def _response(approval: Approval, tools: ToolRuntimeManager, agents: AgentRegistry, workflows: WorkflowManager) -> ApprovalResponse:
+async def approval_response(approval: Approval, tools: ToolRuntimeManager, agents: AgentRegistry, workflows: WorkflowManager) -> ApprovalResponse:
     binding = approval.binding
     shown, redacted = redact_arguments(binding.arguments)
     try:

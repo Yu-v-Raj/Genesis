@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.app.core.core_services.pagination import PageCursor, after_cursor
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.execution_runtime.application.repositories import ExecutionRepository
 from backend.app.core.execution_runtime.domain.execution import Execution
@@ -57,8 +58,10 @@ class SqlAlchemyExecutionRepository(ExecutionRepository):
             row = await db.get(ExecutionRow, execution_id)
             return None if row is None else _from_row(row)
 
-    async def list(self, agent_id: UUID | None = None, limit: int = 200) -> tuple[Execution, ...]:
-        query = select(ExecutionRow).order_by(ExecutionRow.created_at.desc()).limit(limit)
+    async def list(self, agent_id: UUID | None = None, limit: int = 200, *, before: PageCursor | None = None) -> tuple[Execution, ...]:
+        query = select(ExecutionRow).order_by(ExecutionRow.created_at.desc(), ExecutionRow.id.desc()).limit(limit)
+        if before is not None:
+            query = query.where(after_cursor(ExecutionRow.created_at, ExecutionRow.id, before))
         if agent_id is not None:
             query = query.where(ExecutionRow.agent_id == agent_id)
         async with persistence_transaction(self._factory, "execution.list") as db:

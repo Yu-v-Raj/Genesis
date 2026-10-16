@@ -1,14 +1,17 @@
 """Persistence port for workflow definitions and runs.
 
-Run updates are compare-and-set on ``Workflow.version`` and write the run and all of its
-step states in one transaction, so step progress and run status never disagree.
+Run updates are compare-and-set on ``Workflow.version`` and write the run, all of its
+step states and a timeline entry for every status change in one transaction, so step
+progress, run status and history never disagree.
 """
 
 from abc import ABC, abstractmethod
 from datetime import datetime
 from uuid import UUID
 
-from backend.app.core.workflow_runtime.domain.models import Workflow, WorkflowDefinition
+from backend.app.core.core_services.pagination import PageCursor
+from backend.app.core.workflow_runtime.domain.models import Workflow, WorkflowDefinition, WorkflowStatus
+from backend.app.core.workflow_runtime.domain.transition import WorkflowTransition
 
 
 class WorkflowRepository(ABC):
@@ -35,8 +38,16 @@ class WorkflowRepository(ABC):
     async def get_run(self, run_id: UUID) -> Workflow | None: ...
 
     @abstractmethod
-    async def list_runs(self, limit: int = 200) -> tuple[Workflow, ...]:
-        """Newest first."""
+    async def list_runs(self, limit: int = 200, *, before: PageCursor | None = None) -> tuple[Workflow, ...]:
+        """Newest first by (created_at, workflow_id); ``before`` continues after that cursor."""
+
+    @abstractmethod
+    async def runs_with_status(self, statuses: tuple[WorkflowStatus, ...]) -> tuple[Workflow, ...]:
+        """Every run in one of ``statuses``, however old (for recovery and resumption)."""
+
+    @abstractmethod
+    async def history(self, run_id: UUID) -> tuple[WorkflowTransition, ...]:
+        """The run's recorded status changes, oldest first."""
 
     @abstractmethod
     async def delete_run(self, run_id: UUID) -> None: ...

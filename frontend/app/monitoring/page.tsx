@@ -6,9 +6,11 @@ import { Activity, Search, X } from "lucide-react";
 
 import { RealtimeNotifications } from "@/components/dashboard/realtime-notifications";
 import { ExecutionInspector } from "@/components/executions/execution-inspector";
+import { DurableEvents } from "@/components/operations/durable-events";
 import { EventStream } from "@/components/operations/event-stream";
 import { LogViewer } from "@/components/operations/log-viewer";
 import { SystemPanel } from "@/components/operations/system-panel";
+import { WorkflowRunsPanel } from "@/components/operations/workflow-runs-panel";
 import { Button } from "@/components/ui/button";
 import { Alert, EmptyState, Skeleton } from "@/components/ui/feedback";
 import { Input, Select } from "@/components/ui/field";
@@ -23,11 +25,13 @@ import {
   formatDuration, hasActiveFilters, kindLabel, operationsQuery, relativeTime, summarizeExecutions, type ExecutionFilters, type StatusFilter,
 } from "@/lib/operations";
 import { statusPresentation } from "@/lib/status";
+import { isDurableEventType, mergeById } from "@/lib/traces";
 import { cn } from "@/lib/utils";
+import { ExecutionApiError, ExecutionService } from "@/services/execution.service";
 import type { Execution } from "@/types/executions";
 
-type Tab = "executions" | "events" | "logs" | "system";
-const TABS = new Set<Tab>(["executions", "events", "logs", "system"]);
+type Tab = "executions" | "workflows" | "events" | "logs" | "system";
+const TABS = new Set<Tab>(["executions", "workflows", "events", "logs", "system"]);
 const PAGE = 50;
 const TAB_PREFIX = "operations";
 
@@ -62,16 +66,34 @@ function Operations() {
   const tabParam = params.get("tab") as Tab | null;
   const tab: Tab = tabParam && TABS.has(tabParam) ? tabParam : "executions";
   const selectedId = params.get("execution");
+  const selectedRunId = params.get("run");
   const [query, setQuery] = useState(filters.query);
   const [limit, setLimit] = useState(PAGE);
+  const [eventView, setEventView] = useState<"stored" | "live">("stored");
+  // Executions older than the newest page, loaded on request.
+  const [older, setOlder] = useState<{ executions: Execution[]; nextBefore: string | null; loading: boolean; error: string | null }>({ executions: [], nextBefore: null, loading: false, error: null });
 
-  function go(view: Partial<ExecutionFilters> & { tab?: Tab; execution?: string | null }, mode: "push" | "replace" = "replace") {
-    const next = { ...filters, query, tab, execution: selectedId, ...view };
+  function go(view: Partial<ExecutionFilters> & { tab?: Tab; execution?: string | null; run?: string | null }, mode: "push" | "replace" = "replace") {
+    const next = { ...filters, query, tab, execution: selectedId, run: selectedRunId, ...view };
     router[mode](`${pathname}${operationsQuery(next)}`, { scroll: false });
   }
 
   const agentNames: Record<string, string> = Object.fromEntries((data?.agents ?? []).map((agent) => [agent.id, agent.name]));
-  const executions = data?.executions ?? [];
+  const executions = data ? mergeById(data.executions, older.executions, (item) => item.execution_id, (item) => item.created_at) : [];
+  const olderCursor = older.executions.length ? older.nextBefore : data?.executionsNextBefore ?? null;
+  const latestDurableEvent = data?.events.find((event) => isDurableEventType(event.event_type))?.id ?? null;
+  const latestWorkflowEvent = data?.events.find((event) => event.event_type.startsWith("workflow."))?.id ?? null;
+
+  async function loadOlderExecutions() {
+    if (!olderCursor) return;
+    setOlder((current) => ({ ...current, loading: true, error: null }));
+    try {
+      const page = await ExecutionService.list(olderCursor);
+      setOlder((current) => ({ executions: [...current.executions, ...page.executions], nextBefore: page.next_before ?? null, loading: false, error: null }));
+    } catch (cause) {
+      setOlder((current) => ({ ...current, loading: false, error: cause instanceof ExecutionApiError ? cause.message : "Older runs couldn't be loaded." }));
+    }
+  }
   const visible = filterExecutions(executions, { ...filters, query }, agentNames);
   const kinds = [...new Set(executions.map(executionKind))].sort();
   const summary = data ? summarizeExecutions(executions, now) : null;
@@ -100,7 +122,8 @@ function Operations() {
   }
 
   const tabs: TabItem<Tab>[] = [
-    { value: "executions", label: "Executions", badge: data ? countLabel(executions.length, executions.length >= 200) : undefined },
+    { value: "executions", label: "Executions", badge: data ? countLabel(executions.length, olderCursor !== null) : undefined },
+    { value: "workflows", label: "Workflow runs" },
     { value: "events", label: "Events" },
     { value: "logs", label: "Logs" },
     { value: "system", label: "System" },
@@ -120,7 +143,7 @@ function Operations() {
       {data && <RealtimeNotifications events={data.events.slice(0, 1)} />}
       <PageHeader
         title="Operations"
-        description="Inspect Agent runs, follow system activity and check service health."
+        description="Trace Agent runs and workflow runs end to end, follow stored activity and check service health."
         meta={
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground" role="status">
             <span className="inline-flex items-center gap-1.5"><StatusDot tone={connection.tone} pulse={connectionStatus === "connecting"} />{connectionStatus === "connected" ? "Live updates on" : connectionStatus === "connecting" ? "Connecting to live updates…" : "Live updates disconnected — reconnecting"}</span>
@@ -156,8 +179,35 @@ function Operations() {
             <div {...tabPanelProps(TAB_PREFIX, tab)} className="pt-5 focus:outline-none">
               {data === null ? (
                 <div className="flex flex-col gap-2" aria-busy="true">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} className="h-14 w-full" />)}</div>
+              ) : tab === "workflows" ? (
+                <WorkflowRunsPanel
+                  selectedId={selectedRunId}
+                  onSelect={(id) => go({ run: id }, "push")}
+                  onBack={() => go({ run: null })}
+                  refreshKey={latestWorkflowEvent}
+                  now={now}
+                />
               ) : tab === "events" ? (
-                <EventStream events={data.events} agentNames={agentNames} now={now} />
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div role="group" aria-label="Event source" className="inline-flex w-fit rounded-md border border-border p-0.5">
+                      {([["stored", "Stored history"], ["live", "Live, this session"]] as const).map(([value, label]) => (
+                        <button key={value} type="button" aria-pressed={eventView === value} onClick={() => setEventView(value)}
+                          className={cn("h-7 rounded px-2.5 text-xs font-medium transition-colors", eventView === value ? "bg-white/[0.08] text-foreground" : "text-muted-foreground hover:text-foreground")}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {eventView === "stored"
+                        ? "Run, workflow, tool, approval and model-call events, kept across restarts."
+                        : "Everything the server has published since it started, including Agent, memory and system events."}
+                    </p>
+                  </div>
+                  {eventView === "stored"
+                    ? <DurableEvents agentNames={agentNames} now={now} refreshKey={latestDurableEvent} />
+                    : <EventStream events={data.events} agentNames={agentNames} now={now} />}
+                </div>
               ) : tab === "logs" ? (
                 <LogViewer events={data.events} />
               ) : tab === "system" ? (
@@ -186,8 +236,8 @@ function Operations() {
                       </Button>
                     )}
                     <p className="text-xs text-muted-foreground sm:ml-auto" aria-live="polite">
-                      {filtered ? `${visible.length} of ${executions.length} runs` : `${executions.length} runs`}
-                      {executions.length >= 200 && " (newest 200)"}
+                      {filtered ? `${visible.length} of ${executions.length} loaded runs` : `${executions.length} runs`}
+                      {olderCursor && " (older runs available)"}
                     </p>
                   </div>
 
@@ -204,11 +254,16 @@ function Operations() {
                               <ExecutionRow key={execution.execution_id} execution={execution} agentName={agentNames[execution.agent_id]} selected={execution.execution_id === selectedId} now={now} onSelect={select} />
                             ))}
                           </ul>
-                          {visible.length > limit && (
+                          {visible.length > limit ? (
                             <button type="button" onClick={() => setLimit((value) => value + PAGE)} className="w-full border-t border-border py-2 text-xs text-muted-foreground transition-colors hover:text-foreground">
                               Show more ({visible.length - limit} older)
                             </button>
+                          ) : olderCursor && (
+                            <button type="button" onClick={() => void loadOlderExecutions()} disabled={older.loading} className="w-full border-t border-border py-2 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60">
+                              {older.loading ? "Loading…" : "Load older runs from history"}
+                            </button>
                           )}
+                          {older.error && <p role="alert" className="border-t border-border px-4 py-2 text-xs text-danger">{older.error}</p>}
                         </div>
                       )}
                     </div>

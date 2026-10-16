@@ -1,12 +1,16 @@
 """REST adapters for Tool Runtime."""
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
 from backend.app.core.api.dependencies.system import get_tool_runtime_manager
+from backend.app.core.api.pagination import BeforeCursor, page_cursor
+from backend.app.core.core_services.pagination import next_cursor
 from backend.app.core.api.schemas.tools import ToolCapabilitiesResponse, ToolExecuteRequest, ToolHistoryResponse, ToolListResponse, ToolResponse, TaskResponse
+from backend.app.core.tool_runtime.application.task_repository import TaskQuery
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
 from backend.app.core.tool_runtime.domain.argument_limits import MAX_METADATA_BYTES, size_problem
 from backend.app.core.tool_runtime.domain.authorization import (
@@ -28,8 +32,21 @@ def list_tools(manager: ToolManagerDependency) -> ToolListResponse:
 
 
 @router.get("/history", response_model=ToolHistoryResponse)
-def history(manager: ToolManagerDependency) -> ToolHistoryResponse:
-    return ToolHistoryResponse(tasks=[TaskResponse.from_task(task) for task in manager.history()])
+async def history(
+    manager: ToolManagerDependency,
+    before: BeforeCursor = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    tool_name: Annotated[str | None, Query(max_length=200)] = None,
+    execution_id: UUID | None = None,
+    workflow_id: UUID | None = None,
+) -> ToolHistoryResponse:
+    """Durable tool runs, newest first, across restarts."""
+    query = TaskQuery(execution_id=execution_id, workflow_id=workflow_id, tool_name=tool_name)
+    page = await manager.task_page(query, before=page_cursor(before), limit=limit + 1)
+    return ToolHistoryResponse(
+        tasks=[TaskResponse.from_task(task) for task in page[:limit]],
+        next_before=next_cursor(page, limit, lambda task: task.created_at, lambda task: task.task_id),
+    )
 
 
 @router.get("/capabilities", response_model=ToolCapabilitiesResponse)

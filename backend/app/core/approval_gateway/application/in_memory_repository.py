@@ -47,6 +47,17 @@ class InMemoryApprovalRepository(ApprovalRepository):
         items = sorted(self._items.values(), key=lambda item: item.created_at, reverse=True)
         return tuple(item for item in items if states is None or item.state in states)[:limit]
 
+    async def related(self, *, execution_id: UUID | None = None, workflow_id: UUID | None = None, limit: int = 200) -> tuple[Approval, ...]:
+        if execution_id is None and workflow_id is None:
+            return ()
+        items = sorted(self._items.values(), key=lambda item: item.created_at, reverse=True)
+        return tuple(
+            item
+            for item in items
+            if (execution_id is None or item.binding.subject.get("execution_id") == str(execution_id))
+            and (workflow_id is None or item.binding.subject.get("workflow_id") == str(workflow_id))
+        )[:limit]
+
     async def due_for_expiry(self, now: datetime) -> tuple[Approval, ...]:
         return tuple(item for item in self._items.values() if item.state in ACTIVE_STATES and item.expires_at <= now)
 

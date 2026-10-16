@@ -6,6 +6,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.app.core.api.dependencies.system import get_workflow_manager
+from backend.app.core.api.pagination import BeforeCursor, page_cursor
+from backend.app.core.core_services.pagination import next_cursor
 from backend.app.core.api.schemas.workflows import (
     WorkflowCreateRequest,
     WorkflowDefinitionListResponse,
@@ -97,8 +99,17 @@ async def create_workflow(request: WorkflowCreateRequest, manager: Manager) -> W
 
 
 @router.get("/api/workflows", response_model=WorkflowListResponse)
-async def list_workflows(manager: Manager) -> WorkflowListResponse:
-    return WorkflowListResponse(workflows=[response(manager, item) for item in await manager.list()])
+async def list_workflows(
+    manager: Manager,
+    before: BeforeCursor = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> WorkflowListResponse:
+    """Workflow runs, newest first."""
+    page = await manager.list(before=page_cursor(before), limit=limit + 1)
+    return WorkflowListResponse(
+        workflows=[response(manager, item) for item in page[:limit]],
+        next_before=next_cursor(page, limit, lambda run: run.created_at, lambda run: run.workflow_id),
+    )
 
 
 @router.get("/api/workflows/{workflow_id}", response_model=WorkflowResponse)

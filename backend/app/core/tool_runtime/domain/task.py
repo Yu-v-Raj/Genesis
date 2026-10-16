@@ -31,9 +31,15 @@ class Task:
     finished_at: datetime | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
     result: ToolResult | None = None
+    created_at: datetime = field(default_factory=lambda: utc_now())
+    tool_version: str | None = None
+    # A display copy of the arguments with secret-looking fields redacted (never the
+    # exact values: those live only in the call and, for approvals, the approval record).
+    arguments: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "arguments", MappingProxyType(dict(self.arguments)))
 
     def with_updates(self, **changes: object) -> "Task":
         """Return a copy with lifecycle updates applied."""

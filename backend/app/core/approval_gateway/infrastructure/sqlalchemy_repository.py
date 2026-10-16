@@ -87,6 +87,24 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
                 continue  # listed nowhere and usable by nothing; logged above
         return tuple(loaded)
 
+    async def related(self, *, execution_id: UUID | None = None, workflow_id: UUID | None = None, limit: int = 200) -> tuple[Approval, ...]:
+        if execution_id is None and workflow_id is None:
+            return ()
+        query = select(ApprovalRow).order_by(ApprovalRow.created_at.desc()).limit(limit)
+        if execution_id is not None:
+            query = query.where(ApprovalRow.execution_id == execution_id)
+        if workflow_id is not None:
+            query = query.where(ApprovalRow.workflow_id == workflow_id)
+        async with persistence_transaction(self._factory, "approval.related") as db:
+            rows = list((await db.execute(query)).scalars())
+        loaded: list[Approval] = []
+        for row in rows:
+            try:
+                loaded.append(_load(row))
+            except PersistenceError:
+                continue
+        return tuple(loaded)
+
     async def due_for_expiry(self, now: datetime) -> tuple[Approval, ...]:
         async with persistence_transaction(self._factory, "approval.due") as db:
             rows = (
@@ -109,6 +127,14 @@ def _load(row: ApprovalRow) -> Approval:
         raise PersistenceError("A stored approval request is invalid and can't be used.") from error
 
 
+def _subject_id(subject: object, key: str) -> UUID | None:
+    value = subject.get(key) if hasattr(subject, "get") else None  # type: ignore[union-attr]
+    try:
+        return None if value is None else UUID(str(value))
+    except ValueError:
+        return None
+
+
 def _columns(approval: Approval) -> dict[str, object]:
     binding = approval.binding
     return {
@@ -116,6 +142,8 @@ def _columns(approval: Approval) -> dict[str, object]:
         "state": approval.state.value,
         "caller": binding.caller,
         "subject": dict(binding.subject),
+        "execution_id": _subject_id(binding.subject, "execution_id"),
+        "workflow_id": _subject_id(binding.subject, "workflow_id"),
         "tool_name": binding.tool_name,
         "tool_version": binding.tool_version,
         "tool_contract": binding.tool_contract,

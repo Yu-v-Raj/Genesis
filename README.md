@@ -60,7 +60,7 @@ Genesis is in **active development** and is meant to run **locally, for a single
 | **Memory** | Agent-scoped records (fact, note, preference, context) with tags. Create, edit, delete and search, persisted in the database. The newest memories are added to each conversation's context. | Search is case-insensitive substring matching, not semantic search. |
 | **Workflows** | Versioned definitions of tool steps with dependencies. Runs execute ready steps in parallel and can be started, paused, resumed, cancelled, retried and deleted. Crash recovery. | Steps call tools directly, with a workflow identity and no Agent. The console cannot edit or delete saved definitions. |
 | **Model providers** | OpenAI and Google Gemini adapters behind one provider interface, with a manual test request from the console. | "Configured" means a key is present, not that requests succeed. |
-| **Operations** | Executions with full state timelines, retry and cancel; recent events, logs and service health; a live event stream. | Events, logs and tool-run history are kept in memory and reset on restart. |
+| **Operations** | Traces of Agent executions (timeline, model calls, tool runs, approvals, events) and of workflow runs (every run and step change with the worker that made it, tool runs, approvals); stored event history with paging; logs, a live event stream and service health. | Logs and Agent, memory and system events stay in memory and reset on restart. |
 | **Console** | Next.js app shell with a sidebar, global Command Palette (⌘K / Ctrl+K), deep-linkable URLs, responsive layouts and accessible dialogs. | Single operator; no accounts. |
 | **Local API protection** | Loopback-only `Host` check and an `Origin` check on state-changing requests and WebSocket handshakes. | Not authentication; see [Security](#security). |
 
@@ -99,6 +99,7 @@ flowchart LR
         Bus(("EventBus"))
         AgentRT & ExecRT & WfRT & MemRT & LLMRT & ToolRT -. "typed events" .-> Bus
         Bus -.-> History["Event history<br/>(in memory)"]
+        Bus -.-> Recorder["Durable event recorder"]
         Bus -.-> WS["WebSocket manager"]
     end
 
@@ -106,7 +107,7 @@ flowchart LR
     UI -- "ws /ws/events" --> Guard
     WS -. "live events" .-> UI
     LLMRT --> Providers["OpenAI / Gemini APIs"]
-    AgentRT & ExecRT & WfRT & MemRT --> DB[("SQLite or PostgreSQL<br/>via SQLAlchemy")]
+    AgentRT & ExecRT & WfRT & MemRT & ToolRT & Recorder --> DB[("SQLite or PostgreSQL<br/>via SQLAlchemy")]
 ```
 
 ### Core subsystems
@@ -120,11 +121,11 @@ All paths are under `backend/app/core/`.
 | Runtime lifecycle | `runtime/` | Starts and stops registered services in order. |
 | Agent Runtime | `agent_runtime/` | Agent identity and lifecycle (`agent_manager.py`, `agent_registry.py`), configuration, sessions, context assembly, the interaction loop (`agent_interaction_service.py`), chat as durable work (`chat_work.py`), and Agent tool grants (`tool_grants.py`). |
 | Execution Runtime | `execution_runtime/` | Durable executions: queue, lease-based worker, state timeline, checkpoints, retry decisions and crash recovery. Routes work by kind (`chat`) or `tool_name`. |
-| Tool Runtime | `tool_runtime/` | Tool contracts and built-ins (`domain/tool.py`), registry, executor, `ToolRuntimeManager` (the only entry point), `authorization_policy.py`, `argument_schema.py`, and execution contexts (`domain/authorization.py`). |
+| Tool Runtime | `tool_runtime/` | Tool contracts and built-ins (`domain/tool.py`), registry, executor, `ToolRuntimeManager` (the only entry point), `authorization_policy.py`, `argument_schema.py`, execution contexts (`domain/authorization.py`), and durable tool task history (`infrastructure/`). |
 | Memory Runtime | `memory/` | Agent-scoped memory records behind a provider interface. The active provider is `SqlAlchemyMemoryProvider`. |
 | Workflow Runtime | `workflow_runtime/` | Versioned definitions, runs, dependency-aware dispatch, pause, resume, cancel, retry and recovery. Implements the workflow step grant used by the tool policy. |
 | LLM Runtime | `llm_runtime/` | Provider registry, provider-neutral request and response models, error classification, and the OpenAI and Gemini adapters (`infrastructure/`). |
-| Observability | `observability/` | Typed event classes, bounded in-memory event history, the logger service (logs are published as events), and a heartbeat. |
+| Observability | `observability/` | Typed event classes, bounded in-memory event history, the logger service (logs are published as events), a heartbeat, the durable event recorder and store (`runtime_events`), and the read-only Operations query service that assembles traces. |
 | Realtime | `realtime/` | Forwards EventBus events to WebSocket clients on `/ws/events`. |
 | Approval Gateway | `approval_gateway/` | Durable approval requests: the state machine and operation binding (`domain/approval.py`), `ApprovalService` (resolve, decide, consume once, expire, cancel), and the SQLAlchemy repository. Wired into the Tool Runtime, the Execution Runtime (paused chat turns) and the Workflow Runtime (paused steps). |
 | Legacy / scaffolding | `tool_manager/`, `workflow_engine/`, `plugin_system/`, `communication/`, `contracts/`, `core_services/auth/` | `tool_manager/` and `workflow_engine/` are earlier subsystems that are still instantiated but hold no tools or workflows, and no route runs them. `plugin_system/` is instantiated but loads no plugins. The other three are empty packages. |
@@ -136,7 +137,8 @@ All paths are under `backend/app/core/`.
 - **Authority comes from the owning runtime.** The tool policy reads an Agent's allowed tools from the Agent registry and a workflow step's contract from the stored run. It never trusts what a caller claims about itself.
 - **Workflows are not Agents.** Workflow steps run with a workflow context. They do not inherit an Agent's identity or allowlist.
 - **The UI is not a security boundary.** Status badges, disabled buttons and permission labels in the console are informational; enforcement happens on the server.
-- **Durable before effect.** A chat turn checkpoints before each tool call, and a workflow step is stored as running before its tool is called. Recovery can therefore tell what may already have happened.
+- **Durable before effect.** A chat turn checkpoints before each tool call, a workflow step is stored as running before its tool is called, and a tool task is stored as running before the tool acts (if it can't be stored, the tool doesn't run). Recovery can therefore tell what may already have happened.
+- **Each runtime keeps its own records.** Workflow runs are not copied into executions. Traces join executions, workflow runs, tool tasks, approvals and events by the identifiers each record carries from its trusted execution context.
 
 ---
 
@@ -307,6 +309,10 @@ Backend settings come from environment variables and the root `.env` file (envir
 | `GEMINI_API_KEY` | Enables the Gemini provider. Optional. | unset |
 | `GEMINI_MODEL` | Gemini model offered to Agents. | `gemini-3.6-flash` |
 | `GEMINI_TIMEOUT_SECONDS` | Gemini request timeout. | `30` |
+| `LLM_MAX_ATTEMPTS` | Attempts per model request (1 = no retry). Only temporary failures are retried. | `3` |
+| `LLM_RETRY_BASE_DELAY_SECONDS` | First backoff delay; it doubles per retry, with jitter. | `0.5` |
+| `LLM_RETRY_MAX_DELAY_SECONDS` | Longest wait between attempts, including a provider's Retry-After. | `8` |
+| `LLM_TOTAL_TIMEOUT_SECONDS` | Deadline for one model request across all attempts and waits. | `120` |
 | `OPENAI_API_KEY` | Enables the OpenAI provider. Optional. | unset |
 | `OPENAI_MODEL` | OpenAI model offered to Agents. | `gpt-4.1-mini` |
 | `OPENAI_TIMEOUT_SECONDS` | OpenAI request timeout. | `30` |
@@ -317,6 +323,7 @@ Backend settings come from environment variables and the root `.env` file (envir
 | `WORKER_CONCURRENCY` | Executions or runs one process works on at once. | `4` |
 | `AGENT_CONTEXT_MAX_TURNS` | Most recent complete conversation turns sent to the model. | `20` |
 | `EVENT_HISTORY_SIZE` | Events (including logs) kept in memory for the API. | `1000` |
+| `RUNTIME_EVENT_RETENTION_DAYS` | Days to keep stored lifecycle events (executions, workflows, tool runs, approvals, model calls). Older ones are deleted at startup and hourly. | `30` |
 | `APPROVAL_TTL_SECONDS` | How long an approval request stays valid, whether pending or approved but not yet used. After that it expires and the call does not run. | `3600` |
 | `HEARTBEAT_INTERVAL_SECONDS` | Interval of the system heartbeat event. | `30` |
 | `LOG_LEVEL` | Backend log level. | `INFO` |
@@ -338,7 +345,7 @@ Backend settings come from environment variables and the root `.env` file (envir
 | `/agents` | **Agents**: directory, creation, settings and the conversation workspace. | `?agent=` selected Agent, `?session=` conversation, `?create=1` opens the create form |
 | `/memory` | **Memory**: records by Agent, with search, create, edit and delete. | `?agent=`, `?memory=` |
 | `/workflows` | **Workflows**: definitions, runs, step progress and run controls. | `?tab=workflows\|runs`, `?workflow=`, `?run=`, `?create=1` |
-| `/monitoring` | **Operations**: executions (with timeline, retry and cancel), events, logs and system services. | `?tab=executions\|events\|logs\|system`, `?execution=`, plus `status`, `agent`, `kind` and `q` filters |
+| `/monitoring` | **Operations**: execution traces (timeline, model calls, tool runs, approvals, retry and cancel), workflow run traces, stored and live events, logs and system services. | `?tab=executions\|workflows\|events\|logs\|system`, `?execution=`, `?run=`, plus `status`, `agent`, `kind` and `q` filters |
 | `/tools` | **Tools**: catalogue, details (inputs, which Agents may use each tool, restrictions), operator test runs and recent runs. | `?tool=`, `?tab=runs` |
 | `/providers` | **Model providers**: configuration state, observed results and a manual test request. | none |
 | `/approvals` | **Approvals**: requests that need a decision, and history (approved, rejected, expired, cancelled, used). Each shows the exact call, who asked, why, the deadline and what deciding will do. | `?approval=`, `?tab=history` |
@@ -372,7 +379,8 @@ If the process stops mid-turn, recovery checks the stored evidence. A turn prove
 
 - **Definitions.** A definition is a named list of tool steps with dependencies. When it is saved, the server checks the dependency graph (no cycles or missing steps), that every tool exists, and that every step's arguments match its tool's schema. Updating a definition stores a new version (`PUT /api/workflow-definitions/{id}`, API only), and each run keeps the version it was created from.
 - **Runs.** A worker claims a queued run under a lease and starts every step whose dependencies have completed. Independent steps run in parallel. A failed step fails the run and blocks the steps that depend on it.
-- **Durability.** Each step is stored as running before its tool is called.
+- **Durability.** Each step is stored as running before its tool is called. Every run and step status change is also written to the run's timeline (`workflow_run_transitions`) in the same transaction, with the attempt and the worker holding the lease.
+- **Lease ownership.** A worker only runs or records a step while it still holds the run's lease. The tool policy checks the lease owner against storage on every step call (`lease_not_held` otherwise), and a worker that lost its lease discards its late result instead of overwriting the new owner's state.
 - **Recovery.** If a run's lease expires:
   - completed steps are kept;
   - in-flight steps of side-effect-free tools return to pending;
@@ -407,6 +415,17 @@ stateDiagram-v2
     cancelled --> [*]
 ```
 
+### Tracing and history
+
+Every tool task, approval and stored event carries the identifiers of the work that caused it: the execution (and Agent) for a chat turn, or the workflow run, step and attempt for a workflow step. Operations joins them without copying one runtime's records into another. All of these endpoints only read:
+
+- `GET /api/operations/executions/{id}/trace`: the execution, its state timeline, its model calls (provider, model, timing and token counts; never message content), its tool runs, its approval requests and its events.
+- `GET /api/operations/workflows/{id}/trace`: the run, every run and step status change (with the attempt and the worker that held the lease), its tool runs, approvals and events.
+- `GET /api/operations/events`: stored events, newest first. Filter by `event_type` (exact, or a prefix ending in `.`), `execution_id`, `workflow_id`, `approval_id` or `tool_task_id`; page with `before_sequence`.
+- `GET /api/tools/history`, `GET /api/executions` and `GET /api/workflows` page back in time with `before` (pass the previous response's `next_before`, an opaque cursor naming the last record returned) and `limit`. Pages are ordered by creation time and then id, so records created at the same moment are never skipped or repeated. A bare ISO time is also accepted and means "created strictly before it". Stored events page by their unique, increasing `sequence`.
+
+A trace lists at most the 200 most recent tool runs and approvals and 500 events, and says when it was cut.
+
 ### Memory
 
 - **Storage.** Memories belong to one Agent and are stored in the database (the `agent_memories` table), so they survive restarts.
@@ -416,6 +435,9 @@ stateDiagram-v2
 - **Ranking.** There is no relevance ranking or embedding search: the newest memories are used first.
 
 ### Model providers
+
+- **Retries.** A model request that fails temporarily (rate limit or quota, HTTP 408/5xx, a broken connection or a timeout) is retried up to `LLM_MAX_ATTEMPTS` times with exponential backoff, honouring the provider's Retry-After up to `LLM_RETRY_MAX_DELAY_SECONDS`, all within `LLM_TOTAL_TIMEOUT_SECONDS`. Invalid requests, rejected keys, unknown models and unreadable responses fail at once. The SDKs' own retries are switched off so every attempt is visible (`llm.retrying`, and `attempts` on `llm.completed`/`llm.failed`). Only the model request is repeated: tools run after a response arrives, so a retry never re-runs a tool or uses an approval twice. A cancelled request is recorded and never retried. Genesis does not switch to another provider automatically.
+- **Failure categories.** Failed chat turns record `configuration`, `rate_limited`, `provider_unavailable`, `timeout`, `invalid_response` or `provider_error`.
 
 - **Models.** `GET /api/llm/models` lists each provider's model with `configured: true` when its API key is set. That only means a key is present.
 - **Status in the console.** The Providers page shows a provider as responding or failing only from recorded model calls since the backend started. **Send test request** makes one real call through `POST /api/llm/generate`.
@@ -482,7 +504,7 @@ flowchart TD
 ## Database, migrations and persistence
 
 - **Engines.** SQLite and PostgreSQL. CI runs the persistence tests and every migration on both.
-- **Migrations.** Managed by Alembic (`alembic.ini`, `infra/migrations/versions/`; current head `0005`). Apply them with `alembic upgrade head`. `alembic check` reports drift between the models and the migrations.
+- **Migrations.** Managed by Alembic (`alembic.ini`, `infra/migrations/versions/`; current head `0006`). Apply them with `alembic upgrade head`; back up your database file first. `alembic check` reports drift between the models and the migrations. `0006` is additive: it adds the `tool_tasks`, `workflow_run_transitions` and `runtime_events` tables and two indexed columns on `approvals` (filled from each request's subject), and recreates no table.
 - **Startup check.** The backend verifies that the database is reachable and at the expected revision before serving.
 
 | Data | Storage | Survives a restart? |
@@ -492,8 +514,10 @@ flowchart TD
 | Workflow definitions (all versions), runs and steps | Database | Yes |
 | Memories | Database | Yes |
 | Approval requests, decisions and outcomes | Database | Yes; a pending request stays pending, and an approved one is used only by its own waiting work |
-| Tool run history (`/api/tools/history`) | In memory, last 1,000 tasks | No |
-| Events and logs (`/api/events`, `/api/logs`) | In memory, last `EVENT_HISTORY_SIZE` events | No |
+| Workflow run and step timelines | Database (`workflow_run_transitions`) | Yes; deleted with their run |
+| Tool run history (`/api/tools/history`) | Database (`tool_tasks`): redacted arguments; outputs over 16 KiB kept as a marked preview | Yes; a task left running by a crash is closed as failed with "outcome unknown" and never re-run |
+| Lifecycle events: executions, workflows, tool tasks, refusals, approvals, model calls (`/api/operations/events`) | Database (`runtime_events`): redacted payloads of at most 8 KiB, kept `RUNTIME_EVENT_RETENTION_DAYS` | Yes |
+| Logs and other events (`/api/events`, `/api/logs`) | In memory, last `EVENT_HISTORY_SIZE` events | No |
 | A chat reply being generated | In memory | No; the execution becomes interrupted or retryable |
 
 Tests never touch `DATABASE_URL`. `backend/conftest.py` gives each test its own freshly migrated SQLite database.
@@ -551,8 +575,8 @@ These are true of the code today:
 - **Approvals identify a channel, not a person.** Decisions record whether they came from the console (a trusted browser origin) or a local API client. Any program on this machine that can reach the API could also approve requests.
 - **Exactly-once effects aren't guaranteed.** If Genesis stops while an approved tool is running, its effect is unknown: the request records outcome `unknown`, and nothing is re-run automatically.
 - **Workflow steps have no Agent identity.** They don't inherit an Agent's permissions, and a workflow has no permission scope of its own beyond its stored steps.
-- **Workflow runs are not Executions.** They appear on the Workflows page, not in the Operations execution list.
-- **Some history is not durable.** Event, log and tool-run history live in memory and reset on restart.
+- **Workflow runs are not Executions.** They have their own Operations tab and trace rather than appearing in the execution list.
+- **Logs are not durable.** Logs, heartbeats and Agent, memory and system events live in memory and reset on restart. Events are written in the background about every half second, so the last moment before a hard crash can be missing (a clean shutdown writes them).
 - **Partial definition management.** Saved workflow definitions can be versioned through the API but not edited in the console, and they cannot be deleted.
 - **A subset of JSON Schema.** Tool schemas support only the subset described above.
 - **Tools run in the backend process.** They run on its event loop with no isolation or time limit; only the calculator has computational bounds.
@@ -571,15 +595,15 @@ Implemented foundations:
 - CI;
 - the redesigned console;
 - **Milestone 1: Centralized Tool Authorization & Execution Safety.** One policy for every tool call, explicit execution contexts, strict argument validation, schema checks at registration, a bounded calculator, and local Host and Origin protection.
-- **Milestone 2: Approval Gateway (awaiting review).** Durable, single-use approvals bound to the exact operation; paused and resumed chat turns and workflow steps; operator tests that run once when approved; an Approvals page. Decisions record a local channel, not an authenticated identity.
+- **Milestone 2: Approval Gateway.** Durable, single-use approvals bound to the exact operation; paused and resumed chat turns and workflow steps; operator tests that run once when approved; an Approvals page. Decisions record a local channel, not an authenticated identity.
+- **Milestone 4: LLM runtime reliability (awaiting review).** Bounded, observable retries of transient provider failures with backoff and an overall deadline; provider-neutral failure categories; no hidden SDK retries.
+- **Milestone 3: Durable execution and observability (awaiting review).** Durable tool task history, workflow run timelines and lifecycle events; end-to-end traces for executions and workflow runs; lease-ownership enforcement for workflow workers; paging in Operations and Tools.
 
 Planned, in order (no dates):
 
 | Milestone | Scope |
 |---|---|
-| 3. Durable execution and unified observability | Workflow runs as first-class executions, durable event and tool history, correlation and diagnosis. |
 | 4. Authoritative tool contracts and workflow management | Backend tool schemas served to clients; editing and deleting definitions; migration of versioned definitions. |
-| 5. LLM runtime reliability | Consistent error classification, timeouts, safe retries, rate limits and fallbacks. |
 | 6. Higher-level Agent capabilities | Planning and multi-step work, then multi-Agent coordination once the lower layers are reliable. |
 | 7. Release hardening | Security and reliability review, restart and capacity tests, deployment validation and documentation. |
 

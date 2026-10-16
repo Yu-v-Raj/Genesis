@@ -15,7 +15,14 @@ function request<T>(endpoint: string, init: RequestInit = {}): Promise<T> {
 
 /** Typed REST adapter for the existing dependency-aware Workflow Runtime API. */
 export const WorkflowService = Object.freeze({
-  list: (): Promise<WorkflowListResponse> => request(""),
+  /** Newest first; pass `before` (from `next_before`) for older runs. */
+  list: (before?: string | null, limit?: number): Promise<WorkflowListResponse> => {
+    const params = new URLSearchParams();
+    if (before) params.set("before", before);
+    if (limit) params.set("limit", String(limit));
+    const search = params.toString();
+    return request(search ? `?${search}` : "");
+  },
   get: (workflowId: string): Promise<Workflow> => request(`/${encodeURIComponent(workflowId)}`),
   create: (input: WorkflowCreateRequest): Promise<Workflow> => request("", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }),
   delete: (workflowId: string): Promise<Workflow> => request(`/${encodeURIComponent(workflowId)}`, { method: "DELETE" }),

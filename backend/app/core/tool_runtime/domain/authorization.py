@@ -42,6 +42,10 @@ class WorkflowToolContext:
     workflow_id: UUID
     step_id: str
     attempt: int
+    # The worker that holds the run's lease. Checked against storage on every call so a
+    # worker that lost its lease can't run the step again; not part of what an approval
+    # covers (a recovered run may be finished by another worker).
+    lease_owner: str
 
     @property
     def caller(self) -> ToolCaller:
@@ -84,6 +88,7 @@ class DenialReason(StrEnum):
     STEP_NOT_FOUND = "step_not_found"
     STEP_NOT_RUNNING = "step_not_running"
     STEP_MISMATCH = "step_mismatch"
+    LEASE_NOT_HELD = "lease_not_held"
     PERMISSION_UNENFORCEABLE = "permission_unenforceable"
     INVALID_ARGUMENTS = "invalid_arguments"
     ARGUMENTS_TOO_LARGE = "arguments_too_large"

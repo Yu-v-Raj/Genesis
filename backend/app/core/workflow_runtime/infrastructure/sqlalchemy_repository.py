@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.app.core.core_services.pagination import PageCursor, after_cursor
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.workflow_runtime.application.repositories import WorkflowRepository
 from backend.app.core.workflow_runtime.domain.models import (
@@ -18,10 +19,12 @@ from backend.app.core.workflow_runtime.domain.models import (
     WorkflowTask,
     WorkflowTaskStatus,
 )
+from backend.app.core.workflow_runtime.domain.transition import WorkflowTransition, transitions_between
 from backend.app.core.workflow_runtime.infrastructure.orm import (
     WorkflowDefinitionRow,
     WorkflowRunRow,
     WorkflowRunStepRow,
+    WorkflowRunTransitionRow,
 )
 from backend.app.database.transactions import persistence_transaction
 
@@ -83,6 +86,7 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
         async with persistence_transaction(self._factory, "workflow.run.add") as db:
             await db.execute(insert(WorkflowRunRow).values(**_run_columns(stored)))
             await db.execute(insert(WorkflowRunStepRow), [_step_columns(stored.workflow_id, i, t) for i, t in enumerate(stored.tasks)])
+            await _append_transitions(db, None, stored)
         return stored
 
     async def save_run(self, current: Workflow, updated: Workflow) -> Workflow:
@@ -106,6 +110,7 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
                         .where(WorkflowRunStepRow.run_id == saved.workflow_id, WorkflowRunStepRow.task_id == task.task_id)
                         .values(**{k: v for k, v in columns.items() if k not in {"run_id", "task_id"}})
                     )
+            await _append_transitions(db, current, saved)
         return saved
 
     async def get_run(self, run_id: UUID) -> Workflow | None:
@@ -116,8 +121,34 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             steps = await _steps(db, [run_id])
         return _run_from_row(row, steps.get(run_id, []))
 
-    async def list_runs(self, limit: int = 200) -> tuple[Workflow, ...]:
-        return await self._runs(select(WorkflowRunRow).order_by(WorkflowRunRow.created_at.desc()).limit(limit), "workflow.run.list")
+    async def list_runs(self, limit: int = 200, *, before: PageCursor | None = None) -> tuple[Workflow, ...]:
+        query = select(WorkflowRunRow).order_by(WorkflowRunRow.created_at.desc(), WorkflowRunRow.id.desc()).limit(limit)
+        if before is not None:
+            query = query.where(after_cursor(WorkflowRunRow.created_at, WorkflowRunRow.id, before))
+        return await self._runs(query, "workflow.run.list")
+
+    async def runs_with_status(self, statuses: tuple[WorkflowStatus, ...]) -> tuple[Workflow, ...]:
+        query = select(WorkflowRunRow).where(WorkflowRunRow.status.in_([s.value for s in statuses])).order_by(WorkflowRunRow.updated_at)
+        return await self._runs(query, "workflow.run.by_status")
+
+    async def history(self, run_id: UUID) -> tuple[WorkflowTransition, ...]:
+        query = select(WorkflowRunTransitionRow).where(WorkflowRunTransitionRow.run_id == run_id).order_by(WorkflowRunTransitionRow.sequence)
+        async with persistence_transaction(self._factory, "workflow.run.history") as db:
+            rows = (await db.scalars(query)).all()
+        return tuple(
+            WorkflowTransition(
+                run_id=row.run_id,
+                sequence=row.sequence,
+                step_id=row.step_id,
+                attempt=row.attempt,
+                from_status=row.from_status,
+                to_status=row.to_status,
+                at=_aware(row.at),
+                worker=row.worker,
+                detail=row.detail,
+            )
+            for row in rows
+        )
 
     async def delete_run(self, run_id: UUID) -> None:
         async with persistence_transaction(self._factory, "workflow.run.delete") as db:
@@ -151,6 +182,13 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
                 )
                 if result.rowcount == 1:
                     run_id = row.id
+                    await _append(db, (
+                        WorkflowTransition(
+                            run_id=row.id, sequence=0, step_id=None, attempt=row.attempt,
+                            from_status=WorkflowStatus.QUEUED.value, to_status=WorkflowStatus.RUNNING.value,
+                            at=datetime.now(UTC), worker=owner,
+                        ),
+                    ))
                     break
         else:
             return None
@@ -179,6 +217,37 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             rows = (await db.scalars(query)).all()
             steps = await _steps(db, [row.id for row in rows])
         return tuple(_run_from_row(row, steps.get(row.id, [])) for row in rows)
+
+
+async def _append_transitions(db: AsyncSession, current: Workflow | None, updated: Workflow) -> None:
+    await _append(db, transitions_between(current, updated, first_sequence=0))
+
+
+async def _append(db: AsyncSession, entries: Sequence[WorkflowTransition]) -> None:
+    """Number and insert timeline entries after the run's last one. Callers hold the run's
+    compare-and-set update in this transaction, so no other writer appends concurrently
+    (and the unique (run_id, sequence) constraint would refuse it if one did)."""
+    if not entries:
+        return
+    run_id = entries[0].run_id
+    last = await db.scalar(select(func.max(WorkflowRunTransitionRow.sequence)).where(WorkflowRunTransitionRow.run_id == run_id))
+    await db.execute(
+        insert(WorkflowRunTransitionRow),
+        [
+            {
+                "run_id": entry.run_id,
+                "sequence": (last or 0) + offset,
+                "step_id": entry.step_id,
+                "attempt": entry.attempt,
+                "from_status": entry.from_status,
+                "to_status": entry.to_status,
+                "at": entry.at,
+                "worker": entry.worker,
+                "detail": entry.detail,
+            }
+            for offset, entry in enumerate(entries, start=1)
+        ],
+    )
 
 
 async def _steps(db: AsyncSession, run_ids: Sequence[UUID]) -> dict[UUID, list[WorkflowRunStepRow]]:

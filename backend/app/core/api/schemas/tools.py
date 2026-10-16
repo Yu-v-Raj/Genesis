@@ -54,14 +54,22 @@ class TaskResponse(BaseModel):
     finished_at: datetime | None
     metadata: dict[str, object]
     result: ToolResultResponse | None
+    created_at: datetime | None = None
+    tool_version: str | None = None
+    # A display copy with secret-looking fields replaced; never the raw arguments.
+    arguments: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
     def from_task(cls, task: Task) -> "TaskResponse":
-        return cls(task_id=task.task_id, execution_id=task.execution_id, tool_name=task.tool_name, status=task.status.value, started_at=task.started_at, finished_at=task.finished_at, metadata=dict(task.metadata), result=None if task.result is None else ToolResultResponse(status=task.result.status.value, output=task.result.output, logs=list(task.result.logs), metadata=dict(task.result.metadata), duration=task.result.duration, error=task.result.error))
+        return cls(task_id=task.task_id, execution_id=task.execution_id, tool_name=task.tool_name, status=task.status.value, started_at=task.started_at, finished_at=task.finished_at, metadata=dict(task.metadata), created_at=task.created_at, tool_version=task.tool_version, arguments=dict(task.arguments), result=None if task.result is None else ToolResultResponse(status=task.result.status.value, output=task.result.output, logs=list(task.result.logs), metadata=dict(task.result.metadata), duration=task.result.duration, error=task.result.error))
 
 
 class ToolHistoryResponse(BaseModel):
+    """Newest first. Pass ``next_before`` as ``before`` to load older runs (None: no more).
+    The cursor is opaque: it names the last run returned, so ties in time are never skipped."""
+
     tasks: list[TaskResponse]
+    next_before: str | None = None
 
 
 class ToolCapabilitiesResponse(BaseModel):

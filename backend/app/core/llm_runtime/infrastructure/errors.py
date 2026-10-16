@@ -7,8 +7,11 @@ situations the same way:
 - 401/403: the credential was rejected -> ``LLMConfigurationError`` (HTTP 503), with a
   message saying which setting to fix. Retrying cannot help.
 - 404: the model is not available to this credential -> ``LLMConfigurationError``.
-- 429: rate limit or quota -> ``LLMProviderError`` (HTTP 502), worth retrying later.
-- any timeout type (asyncio, httpx, SDK-specific) -> ``LLMTimeoutError`` (HTTP 504).
+- 429: rate limit or quota -> ``LLMRateLimitError`` (HTTP 502), retryable, honouring the
+  provider's Retry-After when it sends one.
+- 408, 500, 502, 503, 504 and broken connections -> ``LLMTransientError`` (HTTP 502), retryable.
+- any timeout type (asyncio, httpx, SDK-specific) -> ``LLMTimeoutError`` (HTTP 504), retryable.
+- anything else (e.g. 400 invalid request) -> ``LLMProviderError`` (HTTP 502), not retried.
 """
 
 import asyncio
@@ -16,9 +19,14 @@ import asyncio
 from backend.app.core.llm_runtime.domain.exceptions import (
     LLMConfigurationError,
     LLMProviderError,
+    LLMRateLimitError,
     LLMRuntimeError,
     LLMTimeoutError,
+    LLMTransientError,
 )
+
+TRANSIENT_STATUSES = frozenset({408, 500, 502, 503, 504})
+MAX_RETRY_AFTER_SECONDS = 3600.0
 
 
 def http_status(error: BaseException) -> int | None:
@@ -37,6 +45,34 @@ def is_timeout(error: BaseException) -> bool:
     return any("Timeout" in cls.__name__ for cls in type(error).__mro__)
 
 
+def is_connection_failure(error: BaseException) -> bool:
+    """openai.APIConnectionError, httpx.ConnectError/NetworkError/RemoteProtocolError, OSError."""
+    if isinstance(error, (ConnectionError,)):
+        return True
+    names = {cls.__name__ for cls in type(error).__mro__}
+    return bool(names & {"APIConnectionError", "ConnectError", "NetworkError", "RemoteProtocolError", "ReadError", "WriteError"})
+
+
+def retry_after_seconds(error: BaseException) -> float | None:
+    """The delay the provider asked for (``Retry-After`` seconds), bounded; None if absent."""
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get("retry-after-ms")
+        if value is not None:
+            seconds = float(value) / 1000
+        else:
+            value = headers.get("retry-after")
+            if value is None:
+                return None
+            seconds = float(value)  # an HTTP date is ignored: the default backoff applies
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return min(max(seconds, 0.0), MAX_RETRY_AFTER_SECONDS)
+
+
 def classify_provider_failure(
     error: BaseException, *, provider: str, model: str, key_setting: str
 ) -> LLMRuntimeError:
@@ -52,5 +88,11 @@ def classify_provider_failure(
     if status == 404:
         return LLMConfigurationError(f"{provider} model '{model}' is not available to the configured API key.")
     if status == 429:
-        return LLMProviderError(f"{provider} rate limit or quota was exceeded. Try again later.")
+        return LLMRateLimitError(f"{provider} rate limit or quota was exceeded. Try again later.", retry_after=retry_after_seconds(error))
+    if status in TRANSIENT_STATUSES:
+        return LLMTransientError(f"{provider} is temporarily unavailable (HTTP {status}).", retry_after=retry_after_seconds(error))
+    if status is None and is_connection_failure(error):
+        return LLMTransientError(f"Genesis could not reach {provider}.")
+    if status is not None:
+        return LLMProviderError(f"{provider} refused the request (HTTP {status}).")
     return LLMProviderError(f"{provider} generation failed.")

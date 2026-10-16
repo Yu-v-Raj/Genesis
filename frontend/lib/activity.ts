@@ -8,7 +8,7 @@ import type { RealtimeEvent } from "@/types/realtime";
 import { kindLabel } from "./operations.ts";
 import { statusPresentation } from "./status.ts";
 
-export type EventCategory = "agent" | "execution" | "model" | "tool" | "memory" | "workflow" | "system" | "log";
+export type EventCategory = "agent" | "execution" | "model" | "tool" | "approval" | "memory" | "workflow" | "system" | "log";
 
 export const EVENT_CATEGORIES: readonly { value: EventCategory | "all"; label: string }[] = [
   { value: "all", label: "All" },
@@ -16,6 +16,7 @@ export const EVENT_CATEGORIES: readonly { value: EventCategory | "all"; label: s
   { value: "execution", label: "Runs" },
   { value: "model", label: "Models" },
   { value: "tool", label: "Tools" },
+  { value: "approval", label: "Approvals" },
   { value: "memory", label: "Memory" },
   { value: "workflow", label: "Workflows" },
   { value: "system", label: "System" },
@@ -27,6 +28,7 @@ export function eventCategory(eventType: string): EventCategory {
   if (prefix === "execution") return "execution";
   if (prefix === "llm") return "model";
   if (prefix === "tool" || prefix === "task") return "tool";
+  if (prefix === "approval") return "approval";
   if (prefix === "memory" || prefix === "memory_provider") return "memory";
   if (prefix === "workflow") return "workflow";
   if (prefix === "log") return "log";
@@ -78,6 +80,40 @@ const EXECUTION_ACTIONS: Readonly<Record<string, string>> = {
   recovered: "recovered after restart",
 };
 
+const WORKFLOW_RUN_ACTIONS: Readonly<Record<string, string>> = {
+  created: "created",
+  queued: "queued",
+  started: "started",
+  paused: "paused",
+  resumed: "resumed",
+  completed: "completed",
+  failed: "failed",
+  cancelled: "cancelled",
+  interrupted: "interrupted",
+  recovered: "recovered after restart",
+  retried: "queued for another attempt",
+  waiting_approval: "waiting for an approval decision",
+};
+
+const WORKFLOW_STEP_ACTIONS: Readonly<Record<string, string>> = {
+  ready: "is ready",
+  started: "started",
+  completed: "completed",
+  failed: "failed",
+  interrupted: "was interrupted",
+  waiting_approval: "is waiting for approval",
+};
+
+const APPROVAL_ACTIONS: Readonly<Record<string, string>> = {
+  requested: "Approval requested",
+  approved: "Approved",
+  rejected: "Rejected",
+  expired: "Approval expired",
+  cancelled: "Approval request cancelled",
+  consumed: "Approved call started",
+  outcome: "Approved call finished",
+};
+
 /** A one-line description, using an Agent name when the payload identifies one. */
 export function describeEvent(event: RealtimeEvent, agentNames: Readonly<Record<string, string>> = {}): string {
   const [prefix, ...rest] = event.event_type.split(".");
@@ -107,11 +143,31 @@ export function describeEvent(event: RealtimeEvent, agentNames: Readonly<Record<
       return `${model} responded${Number.isFinite(ms) ? ` in ${(ms / 1000).toFixed(1)} s` : ""}${forAgent}`;
     }
     if (action === "failed") return `${model} request failed${forAgent}`;
+    if (action === "retrying") {
+      const attempt = Number(payload.attempt);
+      return `${model} request failed temporarily${Number.isFinite(attempt) ? ` (attempt ${attempt})` : ""}; retrying${forAgent}`;
+    }
   }
   if (prefix === "tool" || prefix === "task") {
     const tool = text(payload.tool_name) ?? text(payload.name) ?? "Tool";
     if (action === "registered") return `Tool registered: ${tool}`;
+    if (event.event_type === "tool.rejected") {
+      // A refusal is not a failure: the tool never started.
+      if (payload.reason === "approval_required") return `${tool} held for the operator's approval`;
+      const reason = text(payload.reason);
+      return `${tool} refused by tool policy${reason ? ` (${reason.replace(/_/g, " ")})` : ""}`;
+    }
     return `${tool} ${action.replace(/_/g, " ") || "event"}`;
+  }
+  if (prefix === "workflow") {
+    const step = text(payload.task_id);
+    if (action.startsWith("task.") && step) return `Workflow step “${step}” ${WORKFLOW_STEP_ACTIONS[action.slice(5)] ?? action.slice(5).replace(/_/g, " ")}`;
+    if (action.startsWith("definition.")) return action === "definition.created" ? "Workflow saved" : "Workflow updated";
+    return `Workflow run ${WORKFLOW_RUN_ACTIONS[action] ?? action.replace(/[._]/g, " ")}`;
+  }
+  if (prefix === "approval") {
+    const tool = text(payload.tool_name) ?? "a tool call";
+    return `${APPROVAL_ACTIONS[action] ?? `Approval ${action.replace(/_/g, " ")}`} · ${tool}`;
   }
   if (event.event_type === "service.registered") return `Service registered: ${text(payload.service) ?? "unknown"}`;
   if (event.event_type === "service.removed") return `Service removed: ${text(payload.service) ?? "unknown"}`;

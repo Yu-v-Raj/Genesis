@@ -4,9 +4,11 @@ from dataclasses import replace
 from datetime import datetime
 from uuid import UUID
 
+from backend.app.core.core_services.pagination import PageCursor, comes_after, newest_first
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.workflow_runtime.application.repositories import WorkflowRepository
 from backend.app.core.workflow_runtime.domain.models import Workflow, WorkflowDefinition, WorkflowStatus
+from backend.app.core.workflow_runtime.domain.transition import WorkflowTransition, transitions_between
 
 
 _LEASED = {WorkflowStatus.RUNNING, WorkflowStatus.PAUSED}
@@ -18,6 +20,7 @@ class InMemoryWorkflowRepository(WorkflowRepository):
         self._definitions: dict[tuple[UUID, int], WorkflowDefinition] = {}
         self._runs: dict[UUID, Workflow] = {}
         self._order: list[UUID] = []
+        self._history: dict[UUID, list[WorkflowTransition]] = {}
 
     async def add_definition(self, definition: WorkflowDefinition) -> WorkflowDefinition:
         key = (definition.definition_id, definition.version)
@@ -43,8 +46,11 @@ class InMemoryWorkflowRepository(WorkflowRepository):
         stored = replace(run, version=1)
         self._runs[stored.workflow_id] = stored
         self._order.append(stored.workflow_id)
+        self._record(None, stored)
         while len(self._order) > self._limit:
-            self._runs.pop(self._order.pop(0), None)
+            dropped = self._order.pop(0)
+            self._runs.pop(dropped, None)
+            self._history.pop(dropped, None)
         return stored
 
     async def save_run(self, current: Workflow, updated: Workflow) -> Workflow:
@@ -55,16 +61,29 @@ class InMemoryWorkflowRepository(WorkflowRepository):
             raise PersistenceConflictError("The workflow run changed concurrently.")
         saved = replace(updated, version=current.version + 1)
         self._runs[saved.workflow_id] = saved
+        self._record(stored, saved)
         return saved
 
     async def get_run(self, run_id: UUID) -> Workflow | None:
         return self._runs.get(run_id)
 
-    async def list_runs(self, limit: int = 200) -> tuple[Workflow, ...]:
-        return tuple(self._runs[i] for i in reversed(self._order) if i in self._runs)[:limit]
+    async def list_runs(self, limit: int = 200, *, before: PageCursor | None = None) -> tuple[Workflow, ...]:
+        newest = newest_first((self._runs[i] for i in self._order if i in self._runs), lambda run: run.created_at, lambda run: run.workflow_id)
+        return tuple(run for run in newest if comes_after(run.created_at, run.workflow_id, before))[:limit]
+
+    async def runs_with_status(self, statuses: tuple[WorkflowStatus, ...]) -> tuple[Workflow, ...]:
+        return tuple(self._runs[i] for i in self._order if i in self._runs and self._runs[i].status in statuses)
+
+    async def history(self, run_id: UUID) -> tuple[WorkflowTransition, ...]:
+        return tuple(self._history.get(run_id, ()))
+
+    def _record(self, current: Workflow | None, updated: Workflow) -> None:
+        entries = self._history.setdefault(updated.workflow_id, [])
+        entries.extend(transitions_between(current, updated, first_sequence=len(entries) + 1))
 
     async def delete_run(self, run_id: UUID) -> None:
         self._runs.pop(run_id, None)
+        self._history.pop(run_id, None)
         if run_id in self._order:
             self._order.remove(run_id)
 
@@ -77,6 +96,7 @@ class InMemoryWorkflowRepository(WorkflowRepository):
                     version=run.version + 1,
                 )
                 self._runs[run_id] = claimed
+                self._record(run, claimed)
                 return claimed
         return None
 
