@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, ShieldAlert, Wrench } from "lucide-react";
+import { ArrowUpRight, ChevronRight, ShieldAlert, Wrench } from "lucide-react";
 
 import { JsonView } from "@/components/ui/disclosure";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -18,7 +18,7 @@ export type StepItem = {
   name: string;
   dependencies: string[];
   configuration: Record<string, unknown>;
-} & Partial<Pick<WorkflowTask, "status" | "started_at" | "finished_at" | "result" | "error">>;
+} & Partial<Pick<WorkflowTask, "status" | "started_at" | "finished_at" | "result" | "error" | "approval_id">>;
 
 function time(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleTimeString() : "—";
@@ -84,9 +84,18 @@ function StepRow({ step, steps, tool }: { step: StepItem; steps: readonly StepIt
           <p className="flex flex-wrap items-center gap-x-2 text-[11px] text-subtle">
             <span>Step ID <code className="font-mono text-foreground/80">{step.task_id}</code></span>
             {toolName && <><span aria-hidden>·</span><Link href={`/tools?tool=${encodeURIComponent(toolName)}`} className={cn("hover:text-foreground")}>About the {toolLabel(toolName).toLowerCase()} tool</Link></>}
+            {step.approval_id && step.status !== "waiting_approval" && <><span aria-hidden>·</span><Link href={`/approvals?approval=${encodeURIComponent(step.approval_id)}`} className="hover:text-foreground">Its approval request</Link></>}
           </p>
         </div>
       </details>
+      {step.status === "waiting_approval" && step.approval_id && (
+        <p className="flex flex-wrap items-center gap-x-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+          <span>This step&apos;s tool call needs your approval. Nothing has run.</span>
+          <Link href={`/approvals?approval=${encodeURIComponent(step.approval_id)}`} className="inline-flex items-center gap-0.5 font-medium text-accent hover:underline">
+            Review it in Approvals<ArrowUpRight aria-hidden className="h-3 w-3" />
+          </Link>
+        </p>
+      )}
     </li>
   );
 }

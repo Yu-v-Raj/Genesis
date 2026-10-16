@@ -2,7 +2,7 @@
 
 import { FormEvent, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, FlaskConical, Play, ShieldAlert, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, FlaskConical, Play, ShieldAlert, ShieldCheck } from "lucide-react";
 
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { ToolRunRow } from "@/components/tools/tool-run";
@@ -93,7 +93,7 @@ export function ToolDetail({ tool, agents, tasks, now, pending, onRun, onBack }:
       <Section title="Restrictions">
         <p className="flex items-start gap-2 text-sm text-foreground">
           {tool.side_effects
-            ? <><ShieldAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-warning" />May change things outside Genesis. If a run that used it is interrupted, retrying asks for confirmation first.</>
+            ? <><ShieldAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-warning" />May change things outside Genesis, so every call waits for your approval in Approvals first. If a run that used it is interrupted, retrying asks for confirmation.</>
             : <><ShieldCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-success" />Declared as having no effects outside Genesis.</>}
         </p>
         <p className="text-xs leading-5 text-muted-foreground">
@@ -160,7 +160,7 @@ function TestRun({ tool, fields, pending, onRun }: { tool: ToolDefinition; field
     <form onSubmit={submit} noValidate className="flex flex-col gap-3">
       <p className="text-xs leading-5 text-muted-foreground">
         Runs the tool once on the Genesis server, outside any Agent. The server validates the inputs and records the run under Recent runs.
-        {tool.side_effects && <strong className="font-medium text-warning"> This tool may change things outside Genesis.</strong>}
+        {tool.side_effects && <strong className="font-medium text-warning"> This tool may change things outside Genesis, so the run waits for your approval in Approvals first.</strong>}
       </p>
       {fields.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -177,7 +177,14 @@ function TestRun({ tool, fields, pending, onRun }: { tool: ToolDefinition; field
         <Button type="submit" size="sm" loading={pending} icon={<Play aria-hidden className="h-3.5 w-3.5" />}>{pending ? "Running…" : "Run test"}</Button>
       </div>
       <div aria-live="polite">
-        {outcome && (outcome.task ? (
+        {outcome?.approvalId ? (
+          <Alert tone="info">
+            <p>Waiting for your approval. Nothing has run.</p>
+            <Link href={`/approvals?approval=${encodeURIComponent(outcome.approvalId)}`} className="mt-1 inline-flex items-center gap-0.5 text-xs font-medium text-accent hover:underline">
+              Review it in Approvals<ArrowUpRight aria-hidden className="h-3 w-3" />
+            </Link>
+          </Alert>
+        ) : outcome && (outcome.task ? (
           <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2/60 p-3">
             <div className="flex items-center gap-2 text-xs"><StatusBadge status={outcome.task.result?.status ?? outcome.task.status} /><span className="text-muted-foreground">Result</span></div>
             {outcome.task.result?.error && <p className="break-words text-xs text-danger">{outcome.task.result.error}</p>}

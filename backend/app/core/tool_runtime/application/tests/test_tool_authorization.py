@@ -16,7 +16,9 @@ from backend.app.core.agent_runtime.application.agent_interaction_service import
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.tool_grants import AgentRegistryToolGrants
-from backend.app.core.approval_gateway.domain.approval import ApprovalDecision, ApprovalRequest, ApprovalStatus
+from backend.app.core.approval_gateway.application.approval_service import ApprovalService
+from backend.app.core.approval_gateway.application.in_memory_repository import InMemoryApprovalRepository
+from backend.app.core.approval_gateway.domain.approval import ApprovalState, DecisionSource
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.llm_runtime.application.llm_manager import LLMManager
 from backend.app.core.llm_runtime.application.provider import LLMProvider
@@ -272,7 +274,7 @@ async def test_a_denied_step_fails_the_run_without_running_the_tool_or_retrying(
     by_id = {task.task_id: task for task in done.tasks}
     assert done.status is WorkflowStatus.FAILED and done.attempt == 1
     assert by_id["disabled"].status is WorkflowTaskStatus.FAILED and by_id["disabled"].error == "This tool is disabled."
-    assert by_id["effects"].status is WorkflowTaskStatus.FAILED and "needs a person's approval" in by_id["effects"].error
+    assert by_id["effects"].status is WorkflowTaskStatus.FAILED and "needs the operator's approval" in by_id["effects"].error
     assert by_id["after"].status is WorkflowTaskStatus.BLOCKED
     assert sum(runtime.calls.values()) == 0 and runtime.tools.history() == ()
     assert {e.payload["reason"] for e in runtime.rejected()} == {"tool_disabled", "approval_required"}
@@ -405,64 +407,106 @@ async def test_denials_are_recorded_without_arguments() -> None:
 
 
 # ---------------------------------------------------------------------- approval
+# Against the real Approval Gateway service (in-memory repository): the policy opens the
+# request, the operator decides, and only execute() consumes it, once.
+
+LOCAL = DecisionSource.LOCAL_CONSOLE
 
 
-class RecordedDecision:
-    """Test stand-in for the Milestone 2 Approval Gateway contract."""
-
-    def __init__(self, decision: ApprovalDecision) -> None:
-        self.decision = decision
-        self.requests: list[ApprovalRequest] = []
-
-    async def decide(self, request: ApprovalRequest) -> ApprovalDecision:
-        self.requests.append(request)
-        return self.decision
+def gateway(bus: EventBus | None = None) -> ApprovalService:
+    return ApprovalService(InMemoryApprovalRepository(), bus or EventBus())
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("decision", "reason"),
-    [
-        (ApprovalDecision(status=ApprovalStatus.NOT_DECIDED), DenialReason.APPROVAL_REQUIRED),
-        (ApprovalDecision(status=ApprovalStatus.APPROVED), DenialReason.APPROVAL_REQUIRED),  # no approval record
-        (ApprovalDecision(status=ApprovalStatus.DENIED, approval_id="a1"), DenialReason.APPROVAL_DENIED),
-    ],
-)
-async def test_side_effects_run_only_with_a_recorded_approval(decision: ApprovalDecision, reason: DenialReason) -> None:
-    runtime = await Runtime(approvals=RecordedDecision(decision)).setup()
+async def test_a_side_effect_needs_an_approved_request_and_runs_once() -> None:
+    approvals = gateway()
+    runtime = await Runtime(approvals=approvals).setup()
 
-    assert (await denied(runtime, "spy_side_effects", OPERATOR)).reason is reason
+    held = await denied(runtime, "spy_side_effects", OPERATOR, {"value": "send"})
+    again = await denied(runtime, "spy_side_effects", OPERATOR, {"value": "send"})
+    assert held.outcome is AuthorizationOutcome.APPROVAL_REQUIRED and held.approval_id is not None
+    assert again.approval_id == held.approval_id  # one pending request per exact operation
+    assert (await approvals.get(held.approval_id)).state is ApprovalState.PENDING
+    assert runtime.calls["spy_side_effects"] == 0
+
+    await approvals.approve(held.approval_id, source=LOCAL)
+    task = await runtime.tools.execute(tool_name="spy_side_effects", arguments={"value": "send"}, context=OPERATOR)
+    stored = await approvals.get(held.approval_id)
+
+    assert runtime.calls["spy_side_effects"] == 1
+    assert task.metadata["approval_id"] == str(held.approval_id)
+    assert stored.state is ApprovalState.CONSUMED and stored.task_id == task.task_id and stored.outcome.value == "completed"
+    # The same operation again needs a new decision.
+    replay = await denied(runtime, "spy_side_effects", OPERATOR, {"value": "send"})
+    assert replay.approval_id != held.approval_id and runtime.calls["spy_side_effects"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_request_never_runs_and_is_not_reused() -> None:
+    approvals = gateway()
+    runtime = await Runtime(approvals=approvals).setup()
+    held = await denied(runtime, "spy_side_effects", OPERATOR)
+
+    await approvals.reject(held.approval_id, source=LOCAL)
+    after = await denied(runtime, "spy_side_effects", OPERATOR)
+
+    assert after.approval_id != held.approval_id and after.outcome is AuthorizationOutcome.APPROVAL_REQUIRED
     assert runtime.calls["spy_side_effects"] == 0
 
 
 @pytest.mark.asyncio
-async def test_an_approval_covers_the_exact_operation_it_was_asked_about() -> None:
-    gateway = RecordedDecision(ApprovalDecision(status=ApprovalStatus.APPROVED, approval_id="approval-7"))
-    runtime = await Runtime(approvals=gateway).setup()
+async def test_an_approval_covers_only_the_exact_operation() -> None:
+    approvals = gateway()
+    runtime = await Runtime(approvals=approvals).setup()
     runtime.bind_agents()
     agent = await runtime.agent("spy_side_effects")
+    other = await runtime.agent("spy_side_effects")
+    held = await denied(runtime, "spy_side_effects", AgentToolContext(agent_id=agent.id), {"value": "a"})
+    await approvals.approve(held.approval_id, source=LOCAL)
 
-    task = await runtime.tools.execute(
-        tool_name="spy_side_effects", arguments={"value": "send"}, context=AgentToolContext(agent_id=agent.id)
-    )
+    changed_arguments = await denied(runtime, "spy_side_effects", AgentToolContext(agent_id=agent.id), {"value": "b"})
+    other_agent = await denied(runtime, "spy_side_effects", AgentToolContext(agent_id=other.id), {"value": "a"})
+    as_operator = await denied(runtime, "spy_side_effects", OPERATOR, {"value": "a"})
 
-    (request,) = gateway.requests
-    assert (request.caller, request.tool_name, dict(request.arguments)) == ("agent", "spy_side_effects", {"value": "send"})
-    assert request.subject == {"agent_id": str(agent.id)}
-    assert task.metadata["approval_id"] == "approval-7" and runtime.calls["spy_side_effects"] == 1
+    assert len({held.approval_id, changed_arguments.approval_id, other_agent.approval_id, as_operator.approval_id}) == 4
+    assert runtime.calls["spy_side_effects"] == 0
+    task = await runtime.tools.execute(tool_name="spy_side_effects", arguments={"value": "a"}, context=AgentToolContext(agent_id=agent.id))
+    assert task.metadata["approval_id"] == str(held.approval_id) and runtime.calls["spy_side_effects"] == 1
 
 
 @pytest.mark.asyncio
 async def test_approval_never_overrides_eligibility() -> None:
-    gateway = RecordedDecision(ApprovalDecision(status=ApprovalStatus.APPROVED, approval_id="a1"))
-    runtime = await Runtime(approvals=gateway).setup()
+    approvals = gateway()
+    runtime = await Runtime(approvals=approvals).setup()
     runtime.bind_agents()
-    agent = await runtime.agent("spy")  # not allowed to use spy_side_effects
+    agent = await runtime.agent("spy_side_effects")
+    held = await denied(runtime, "spy_side_effects", AgentToolContext(agent_id=agent.id))
+    await approvals.approve(held.approval_id, source=LOCAL)
 
-    decision = await denied(runtime, "spy_side_effects", AgentToolContext(agent_id=agent.id))
+    await runtime.agents.update_configuration(agent.id, llm_model=MODEL, allowed_tools=("spy",), instructions="")
+    revoked = await denied(runtime, "spy_side_effects", AgentToolContext(agent_id=agent.id))
 
-    assert decision.reason is DenialReason.TOOL_NOT_GRANTED
-    assert gateway.requests == [] and runtime.calls["spy_side_effects"] == 0
+    assert revoked.reason is DenialReason.TOOL_NOT_GRANTED
+    assert (await approvals.get(held.approval_id)).state is ApprovalState.APPROVED  # not consumed by a refused call
+    assert runtime.calls["spy_side_effects"] == 0
+
+
+@pytest.mark.asyncio
+async def test_two_concurrent_callers_cannot_both_use_one_approval() -> None:
+    approvals = gateway()
+    runtime = await Runtime(approvals=approvals).setup()
+    held = await denied(runtime, "spy_side_effects", OPERATOR)
+    await approvals.approve(held.approval_id, source=LOCAL)
+
+    results = await asyncio.gather(
+        *(runtime.tools.execute(tool_name="spy_side_effects", arguments={"value": "x"}, context=OPERATOR) for _ in range(5)),
+        return_exceptions=True,
+    )
+
+    ran = [result for result in results if not isinstance(result, BaseException)]
+    refused = [result for result in results if isinstance(result, ToolAuthorizationError)]
+    assert len(ran) == 1 and runtime.calls["spy_side_effects"] == 1
+    assert len(refused) == 4 and all(error.decision.outcome is AuthorizationOutcome.APPROVAL_REQUIRED for error in refused)
 
 
 # ------------------------------------------------------------- undeclared arguments
@@ -568,3 +612,113 @@ async def test_workflow_step_arguments_must_match_exactly_not_by_python_equality
 
     assert as_float.reason is as_bool.reason is DenialReason.STEP_MISMATCH  # 1 == 1.0 == True in Python
     assert exact.allowed
+
+
+@pytest.mark.asyncio
+async def test_an_approved_call_that_fails_or_is_cancelled_records_its_outcome() -> None:
+    approvals = gateway()
+    runtime = await Runtime(approvals=approvals).setup()
+
+    async def failing(request):
+        runtime.calls["spy_failing"] += 1
+        return ToolResult(status=ToolResultStatus.FAILED, error="downstream refused")
+
+    await runtime.tools.register(Tool(definition=ToolMetadata(name="spy_failing", description="f", parameters=VALUE_SCHEMA), handler=failing))
+    held = await denied(runtime, "spy_failing", OPERATOR)
+    await approvals.approve(held.approval_id, source=LOCAL)
+    task = await runtime.tools.execute(tool_name="spy_failing", arguments={"value": "x"}, context=OPERATOR)
+    failed = await approvals.get(held.approval_id)
+    assert task.status.value == "failed" and (failed.state, failed.outcome.value) == (ApprovalState.CONSUMED, "failed")
+
+    # Cancelled while the approved tool runs: its effect is unknown and nothing re-runs it.
+    await runtime.tools.register(Tool(definition=ToolMetadata(name="spy_slow", description="s", parameters=VALUE_SCHEMA), handler=_holding(runtime)))
+    held = await denied(runtime, "spy_slow", OPERATOR)
+    await approvals.approve(held.approval_id, source=LOCAL)
+    call = asyncio.create_task(runtime.tools.execute(tool_name="spy_slow", arguments={"value": "x"}, context=OPERATOR))
+    await runtime.held.wait()
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    cancelled = await approvals.get(held.approval_id)
+    assert (cancelled.state, cancelled.outcome.value) == (ApprovalState.CONSUMED, "unknown")
+    assert runtime.tools.history()[0].status.value == "failed"  # the task is terminal, never "running"
+
+
+def _holding(runtime: "Runtime"):
+    async def run(request):
+        runtime.held.set()
+        await asyncio.sleep(30)
+        return ToolResult(status=ToolResultStatus.COMPLETED, output="late")
+    return run
+
+
+@pytest.mark.asyncio
+async def test_a_stale_attempt_or_duplicate_worker_cannot_use_a_step_approval() -> None:
+    approvals = gateway()
+    runtime = await Runtime(approvals=approvals).setup()
+
+    class RunningStep:
+        attempt = 1
+
+        async def workflow_step_grant(self, workflow_id, step_id):
+            from backend.app.core.tool_runtime.application.authorization_policy import WorkflowStepGrant
+            return WorkflowStepGrant(tool_name="spy_side_effects", arguments={"value": "x"}, running=True, attempt=self.attempt)
+
+    step = RunningStep()
+    runtime.tools.bind_workflow_steps(step)
+    workflow_id = uuid4()
+    first = WorkflowToolContext(workflow_id=workflow_id, step_id="s", attempt=1)
+    held = await denied(runtime, "spy_side_effects", first)
+    await approvals.approve(held.approval_id, source=LOCAL)
+
+    # Two workers that both believe they own the step (e.g. one lost its lease): one call runs.
+    results = await asyncio.gather(
+        *(runtime.tools.execute(tool_name="spy_side_effects", arguments={"value": "x"}, context=first) for _ in range(2)),
+        return_exceptions=True,
+    )
+    assert sum(not isinstance(result, BaseException) for result in results) == 1
+    assert runtime.calls["spy_side_effects"] == 1
+
+    # A later attempt of the same step is a different operation: it needs its own decision.
+    step.attempt = 2
+    later = await denied(runtime, "spy_side_effects", WorkflowToolContext(workflow_id=workflow_id, step_id="s", attempt=2))
+    stale = await denied(runtime, "spy_side_effects", first)
+    assert later.outcome is AuthorizationOutcome.APPROVAL_REQUIRED and later.approval_id != held.approval_id
+    assert stale.reason is DenialReason.STEP_NOT_RUNNING
+    assert runtime.calls["spy_side_effects"] == 1
+
+
+# ------------------------------------------------------------- size limits
+
+
+@pytest.mark.asyncio
+async def test_oversized_arguments_are_refused_on_every_path_before_anything_happens() -> None:
+    approvals = gateway()
+    runtime = await Runtime(approvals=approvals).setup()
+    runtime.bind_agents()
+    agent = await runtime.agent("spy", "spy_side_effects")
+    huge = {"value": "x" * 20_000}
+
+    for tool_name, context in (
+        ("spy", AgentToolContext(agent_id=agent.id)),
+        ("spy_side_effects", AgentToolContext(agent_id=agent.id)),  # would otherwise open a request
+        ("spy_side_effects", OPERATOR),
+        ("spy_side_effects", WorkflowToolContext(workflow_id=uuid4(), step_id="s", attempt=1)),
+    ):
+        decision = await denied(runtime, tool_name, context, huge)
+        assert decision.reason is DenialReason.ARGUMENTS_TOO_LARGE and decision.outcome is AuthorizationOutcome.INVALID_REQUEST
+        assert "16,384" in decision.message and "xxxx" not in decision.message
+
+    assert sum(runtime.calls.values()) == 0 and runtime.tools.history() == ()
+    assert await approvals.list() == ()  # no approval request was ever opened
+    assert all(e.payload["reason"] == "arguments_too_large" for e in runtime.rejected())
+
+
+@pytest.mark.asyncio
+async def test_workflow_definitions_with_oversized_arguments_are_not_saved() -> None:
+    runtime = await Runtime().setup()
+    workflows = await workflow_runtime(runtime)
+
+    with pytest.raises(WorkflowValidationError, match="longer than 16,384 characters"):
+        await workflows.create(name="big", tasks=(step("a", "spy", "x" * 20_000),))
+    assert await workflows.list_definitions() == ()

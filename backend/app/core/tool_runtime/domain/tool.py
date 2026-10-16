@@ -158,6 +158,11 @@ async def _calculator(request: ToolRequest) -> ToolResult:
     return ToolResult(status=ToolResultStatus.COMPLETED, output=output)
 
 
+async def _simulated_action(request: ToolRequest) -> ToolResult:
+    note = _required_string(request.arguments, "note")
+    return ToolResult(status=ToolResultStatus.COMPLETED, output=f"Simulated only; nothing left Genesis: {note}")
+
+
 async def _uuid(_: ToolRequest) -> ToolResult:
     return ToolResult(status=ToolResultStatus.COMPLETED, output=str(uuid4()))
 
@@ -255,5 +260,26 @@ def builtin_tools() -> tuple[Tool, ...]:
                 },
             ),
             handler=_delay,
+        ),
+        # Lets an operator try the approval flow safely: it does nothing outside Genesis,
+        # but declares side effects, so every call needs an approval. Not allowed for any
+        # Agent by default.
+        Tool(
+            definition=ToolMetadata(
+                name="simulated_action",
+                description=(
+                    "Simulates an external action without doing anything outside Genesis. It declares "
+                    "side effects, so every call needs the operator's approval; use it to try approvals safely."
+                ),
+                capabilities=(ToolCapability.SIMULATION,),
+                permissions=permission,
+                side_effects=True,
+                parameters={
+                    "type": "object",
+                    "properties": {"note": {"type": "string"}},
+                    "required": ["note"],
+                },
+            ),
+            handler=_simulated_action,
         ),
     )

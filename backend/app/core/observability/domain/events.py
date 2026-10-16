@@ -286,6 +286,20 @@ class AgentContextUpdated(Event):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionWaitingApproval(Event):
+    """Published when an execution pauses durably until an operator decides an approval."""
+
+    event_type: str = field(init=False, default="execution.waiting_approval")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionResumed(Event):
+    """Published when a waiting execution is re-queued because its decision exists."""
+
+    event_type: str = field(init=False, default="execution.resumed")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ExecutionCreated(Event):
     """Published when an execution record is created."""
 
@@ -381,3 +395,9 @@ class LogCreated(Event):
     """Published after a structured Genesis log record is written."""
 
     event_type: str = field(init=False, default=LOG_CREATED_EVENT_TYPE)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ApprovalEvent(Event):
+    """Approval Gateway lifecycle (approval.requested/approved/rejected/expired/cancelled/
+    consumed/outcome). Payloads carry identifiers and states, never tool arguments."""

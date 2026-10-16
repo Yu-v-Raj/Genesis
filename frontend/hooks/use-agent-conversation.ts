@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentApiError, AgentService } from "@/services/agent.service";
 import { ExecutionApiError, ExecutionService } from "@/services/execution.service";
 import { describeChatError, type ChatProblem } from "@/lib/agent-experience";
-import { isActive, unfinishedChats } from "@/lib/durable-work";
+import { isActive, unfinishedChats, waitingChats } from "@/lib/durable-work";
 import type { Execution } from "@/types/executions";
 import type { Agent, AgentChatResponse, AgentSession, AgentSessionSummary, SessionMessage } from "@/types/agents";
 
@@ -88,7 +88,8 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
     });
   }, [open]);
 
-  const send = useCallback(async (message: string): Promise<AgentChatResponse | null> => {
+  /** The reply; "waiting" when the turn paused for an approval (shown from its execution); null on failure. */
+  const send = useCallback(async (message: string): Promise<AgentChatResponse | "waiting" | null> => {
     const text = message.trim();
     // A ref (not state) guards against double submission before React re-renders.
     if (!agentId || !text || inFlight.current) return null;
@@ -97,9 +98,14 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
     setProblem(null);
     try {
       const response = await AgentService.chat(agentId, text, sessionId);
-      onAgentUpdated?.(response.agent);
-      await open(response.session_id ?? sessionId);
-      return response;
+      if ("status" in response && response.status === "waiting_approval") {
+        await open(response.session_id ?? sessionId);
+        return "waiting";
+      }
+      const reply = response as AgentChatResponse;
+      onAgentUpdated?.(reply.agent);
+      await open(reply.session_id ?? sessionId);
+      return reply;
     } catch (cause) {
       const status = cause instanceof AgentApiError ? cause.status : undefined;
       setProblem(describeChatError(status, cause instanceof Error ? cause.message : String(cause)));
@@ -129,6 +135,18 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
       return cause instanceof ExecutionApiError ? cause.message : "The retry could not be started.";
     }
   }, [open, refreshExecutions, sessionId]);
+
+  /** Cancel a turn that is waiting for approval; the server also cancels its request. */
+  const cancelWaiting = useCallback(async (executionId: string): Promise<string | null> => {
+    try {
+      await ExecutionService.cancel(executionId);
+      return null;
+    } catch (cause) {
+      return cause instanceof ExecutionApiError ? cause.message : "The message could not be cancelled.";
+    } finally {
+      await refreshExecutions();
+    }
+  }, [refreshExecutions]);
 
   const startNewConversation = useCallback(async () => {
     if (!agentId || inFlight.current) return;
@@ -170,7 +188,10 @@ export function useAgentConversation(agentId: string | null, onAgentUpdated?: (a
     dismissProblem: () => setProblem(null),
     send,
     unfinished: unfinishedChats(executions, sessionId),
+    /** Turns paused until the operator decides an approval request. */
+    waiting: waitingChats(executions, sessionId),
     retryUnfinished,
+    cancelWaiting,
     startNewConversation,
     openSession,
     reload: () => open(sessionId),

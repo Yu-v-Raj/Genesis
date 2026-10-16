@@ -141,6 +141,17 @@ class SqlAlchemyExecutionRepository(ExecutionRepository):
             ).all()
         return tuple(_from_row(row) for row in rows)
 
+    async def waiting(self) -> tuple[Execution, ...]:
+        async with persistence_transaction(self._factory, "execution.waiting") as db:
+            rows = (
+                await db.scalars(
+                    select(ExecutionRow)
+                    .where(ExecutionRow.status == ExecutionStatus.WAITING_APPROVAL.value)
+                    .order_by(ExecutionRow.created_at)
+                )
+            ).all()
+        return tuple(_from_row(row) for row in rows)
+
 
 async def _record(db: AsyncSession, execution: Execution, previous: ExecutionStatus | None, detail: str | None) -> None:
     sequence = await db.scalar(

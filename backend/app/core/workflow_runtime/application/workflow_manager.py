@@ -7,6 +7,13 @@ ToolRuntimeManager under a workflow context: the tool policy checks each call ag
 the stored, running step (see ``workflow_step_grant``), and workflows never borrow an
 Agent's identity.
 
+A step whose tool call needs the operator's approval becomes WAITING_APPROVAL (nothing
+ran) and records the request; once nothing else can progress, the run releases its lease
+and waits in WAITING_APPROVAL. ``resume_ready`` (every tick, and when a decision is made)
+re-queues it: an approved step runs again and consumes the approval exactly once, while a
+rejected, expired or cancelled one fails and blocks its dependents. Cancelling the run
+cancels its open approval requests.
+
 Recovery (startup and every dispatcher tick) only touches runs whose lease expired:
 in-flight steps of side-effect-free tools return to PENDING and re-run; in-flight steps
 of tools that may have side effects become INTERRUPTED and the run waits for a person to
@@ -23,7 +30,8 @@ from backend.app.core.core_services.logging.logger import logger
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.tool_runtime.application.authorization_policy import WorkflowStepGrant
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
-from backend.app.core.tool_runtime.domain.authorization import WorkflowToolContext
+from backend.app.core.approval_gateway.domain.approval import ApprovalState
+from backend.app.core.tool_runtime.domain.authorization import AuthorizationOutcome, ToolAuthorizationError, WorkflowToolContext
 from backend.app.core.tool_runtime.domain.task import TaskStatus
 from backend.app.core.workflow_runtime.application.in_memory_repository import InMemoryWorkflowRepository
 from backend.app.core.workflow_runtime.application.repositories import WorkflowRepository
@@ -57,6 +65,18 @@ INTERRUPTED_RUN_MESSAGE = (
     "Its outcome is unknown, so the run was not resumed automatically."
 )
 INTERRUPTED_STEP_MESSAGE = "Interrupted while running; the outcome is unknown."
+_NOT_APPROVED: dict[ApprovalState | None, str] = {
+    ApprovalState.REJECTED: "The operator rejected this step's tool call, so it did not run.",
+    ApprovalState.EXPIRED: "The approval request expired before a decision, so the tool did not run.",
+    ApprovalState.CANCELLED: "The approval request was cancelled, so the tool did not run.",
+    ApprovalState.CONSUMED: "This approval was already used, so the tool was not run again.",
+    None: "The approval request no longer exists, so the tool did not run.",
+}
+_STEP_EVENTS = {
+    WorkflowTaskStatus.COMPLETED: "workflow.task.completed",
+    WorkflowTaskStatus.FAILED: "workflow.task.failed",
+    WorkflowTaskStatus.WAITING_APPROVAL: "workflow.task.waiting_approval",
+}
 
 
 class WorkflowManager:
@@ -204,13 +224,68 @@ class WorkflowManager:
             )
             return wf.with_updates(status=WorkflowStatus.CANCELLED, tasks=tasks, lease_owner=None, lease_expires_at=None)
 
+        before = await self.get(workflow_id)
         run = await self._update(workflow_id, cancel, "workflow.cancelled")
         if workflow_id in self._wake:
             self._wake[workflow_id].set()
         worker = self._workers.get(workflow_id)
         if worker is not None:
             worker.cancel()
+        await self._abandon_approvals(before, "The workflow run was cancelled.")
         return run
+
+    def wake(self, *_: object) -> None:
+        """Ask the dispatcher to look again now (e.g. an approval was just decided)."""
+        self._dispatcher_wake.set()
+
+    async def resume_ready(self) -> tuple[Workflow, ...]:
+        """Re-queue runs waiting on approvals that have been decided. Idempotent: each step's
+        transition is compare-and-set, so a repeated decision event changes nothing."""
+        approval_state = getattr(self._tools, "approval_state", None)
+        if approval_state is None:
+            return ()
+        resumed: list[Workflow] = []
+        for run in await self._repository.list_runs():
+            if run.status is not WorkflowStatus.WAITING_APPROVAL:
+                continue
+            decided: dict[str, ApprovalState | None] = {}
+            for task in run.tasks:
+                if task.status is WorkflowTaskStatus.WAITING_APPROVAL:
+                    state = None if task.approval_id is None else await approval_state(task.approval_id)
+                    if state is not ApprovalState.PENDING:
+                        decided[task.task_id] = state
+            if not decided:
+                continue
+
+            def resolve(wf: Workflow, decided: dict[str, ApprovalState | None] = decided) -> Workflow:
+                if wf.status is not WorkflowStatus.WAITING_APPROVAL:
+                    raise WorkflowLifecycleError("The run is no longer waiting for approval.")
+                tasks = []
+                for task in wf.tasks:
+                    if task.task_id in decided and task.status is WorkflowTaskStatus.WAITING_APPROVAL:
+                        state = decided[task.task_id]
+                        if state is ApprovalState.APPROVED:
+                            task = task.with_updates(status=WorkflowTaskStatus.PENDING, started_at=None)
+                        else:
+                            task = task.with_updates(status=WorkflowTaskStatus.FAILED, error=_NOT_APPROVED.get(state, _NOT_APPROVED[None]), finished_at=utc_now())
+                    tasks.append(task)
+                return wf.with_updates(status=WorkflowStatus.QUEUED, tasks=tuple(tasks), lease_owner=None, lease_expires_at=None)
+
+            try:
+                resumed.append(await self._update(run.workflow_id, resolve, "workflow.resumed"))
+            except (PersistenceConflictError, WorkflowLifecycleError, WorkflowNotFoundError):
+                continue
+        if resumed:
+            self._ensure_dispatcher()
+        return tuple(resumed)
+
+    async def _abandon_approvals(self, run: Workflow, reason: str) -> None:
+        cancel = getattr(self._tools, "cancel_approval", None)
+        if cancel is None:
+            return
+        for task in run.tasks:
+            if task.status is WorkflowTaskStatus.WAITING_APPROVAL and task.approval_id is not None:
+                await cancel(task.approval_id, reason=reason)
 
     async def retry(self, workflow_id: UUID, *, acknowledge_side_effects: bool = False) -> Workflow:
         """Re-run unfinished steps of a failed or interrupted run; completed steps are kept."""
@@ -225,7 +300,7 @@ class WorkflowManager:
             if wf.status is not current.status:
                 raise WorkflowLifecycleError("The run changed; reload it and try again.")
             tasks = tuple(
-                task.with_updates(status=WorkflowTaskStatus.PENDING, started_at=None, finished_at=None, result=None, error=None)
+                task.with_updates(status=WorkflowTaskStatus.PENDING, started_at=None, finished_at=None, result=None, error=None, approval_id=None)
                 if task.status in RESETTABLE_STEP_STATUSES
                 else task
                 for task in wf.tasks
@@ -360,6 +435,7 @@ class WorkflowManager:
                     if not worker.done():
                         await self._repository.renew_run_lease(run_id, self._worker_id, until)
                 await self.recover()
+                await self.resume_ready()
                 while sum(not w.done() for w in self._workers.values()) < self._concurrency and not self._closing:
                     claimed = await self._repository.claim_next_run(self._worker_id, self._lease_until())
                     if claimed is None:
@@ -382,6 +458,7 @@ class WorkflowManager:
             while True:
                 await self._wake[workflow_id].wait()
                 event = ""
+                abandoned = None
                 async with self._lock:
                     workflow = await self.get(workflow_id)
                     if workflow.status in FINISHED_RUN_STATUSES:
@@ -397,8 +474,12 @@ class WorkflowManager:
                             workflow = await self._save(workflow, workflow.with_updates(status=WorkflowStatus.COMPLETED, lease_owner=None, lease_expires_at=None))
                             event = "workflow.completed"
                         elif any(task.status is WorkflowTaskStatus.FAILED for task in workflow.tasks):
+                            abandoned = workflow
                             workflow = await self._save(workflow, self._block_dependents(workflow).with_updates(status=WorkflowStatus.FAILED, error="One or more steps failed.", lease_owner=None, lease_expires_at=None))
                             event = "workflow.failed"
+                        elif any(task.status is WorkflowTaskStatus.WAITING_APPROVAL for task in workflow.tasks):
+                            workflow = await self._save(workflow, workflow.with_updates(status=WorkflowStatus.WAITING_APPROVAL, lease_owner=None, lease_expires_at=None))
+                            event = "workflow.waiting_approval"
                         else:
                             return
                     else:
@@ -407,6 +488,8 @@ class WorkflowManager:
                             updated = updated.with_task(task.with_updates(status=WorkflowTaskStatus.READY))
                         workflow = await self._save(workflow, updated)
                 if event:
+                    if event == "workflow.failed":
+                        await self._abandon_approvals(abandoned, "Another step of the run failed, so this one will not run.")
                     await self._publish(event, workflow)
                     return
                 for task in ready:
@@ -437,14 +520,21 @@ class WorkflowManager:
             updated = task.with_updates(status=WorkflowTaskStatus.COMPLETED if successful else WorkflowTaskStatus.FAILED, result=result.result.output if result.result else None, error=None if successful else (result.result.error if result.result else "Tool task failed"), finished_at=utc_now())
         except asyncio.CancelledError:
             raise  # the step stays RUNNING in storage; recovery decides what it means
-        except Exception as error:  # includes ToolAuthorizationError: the step fails, the tool never ran
+        except ToolAuthorizationError as refused:
+            decision = refused.decision
+            if decision.outcome is AuthorizationOutcome.APPROVAL_REQUIRED and decision.approval_id is not None:
+                # Nothing ran: the step waits for the operator's decision on this exact call.
+                updated = task.with_updates(status=WorkflowTaskStatus.WAITING_APPROVAL, approval_id=decision.approval_id, error=None)
+            else:
+                updated = task.with_updates(status=WorkflowTaskStatus.FAILED, error=str(refused), finished_at=utc_now())
+        except Exception as error:  # the step fails; for a refused call the tool never ran
             updated = task.with_updates(status=WorkflowTaskStatus.FAILED, error=str(error), finished_at=utc_now())
         async with self._lock:
             workflow = await self.get(workflow_id)
             if workflow.status not in {WorkflowStatus.RUNNING, WorkflowStatus.PAUSED}:
                 return  # cancelled or recovered meanwhile
             workflow = await self._save(workflow, workflow.with_task(updated))
-        await self._publish("workflow.task.completed" if updated.status is WorkflowTaskStatus.COMPLETED else "workflow.task.failed", workflow, updated)
+        await self._publish(_STEP_EVENTS.get(updated.status, "workflow.task.failed"), workflow, updated)
 
     # -------------------------------------------------------------------- helpers
 
@@ -485,8 +575,10 @@ class WorkflowManager:
             arguments = task.configuration.get("tool_arguments", {})
             if not isinstance(arguments, Mapping):
                 raise WorkflowValidationError(f"Task {task.task_id!r} has tool_arguments that aren't an object.")
-            if hasattr(self._tools, "arguments_are_valid") and not self._tools.arguments_are_valid(tool_name, arguments):
-                raise WorkflowValidationError(f"Task {task.task_id!r} has arguments that {tool_name!r} doesn't accept.")
+            if hasattr(self._tools, "argument_problem"):
+                problem = self._tools.argument_problem(tool_name, arguments)
+                if problem is not None:
+                    raise WorkflowValidationError(f"Task {task.task_id!r} has arguments that {tool_name!r} doesn't accept: {problem}")
         visiting, visited = set(), set()
         def visit(task_id: str) -> None:
             if task_id in visiting: raise WorkflowValidationError("Workflow dependencies contain a cycle.")
@@ -508,6 +600,7 @@ class WorkflowManager:
         if workflow.definition_id is not None:
             payload.update({"definition_id": str(workflow.definition_id), "definition_version": workflow.definition_version})
         if task is not None: payload.update({"task_id": task.task_id, "task_status": task.status.value})
+        if task is not None and task.approval_id is not None: payload["approval_id"] = str(task.approval_id)
         await self._events.publish(WorkflowEvent(event_type=event, source="workflow_manager", payload=payload))
 
     async def _publish_definition(self, event: str, definition: WorkflowDefinition) -> None:

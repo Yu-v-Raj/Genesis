@@ -1,5 +1,5 @@
 import { requestJson } from "@/services/api-client";
-import type { ToolCapabilitiesResponse, ToolDefinition, ToolExecutionInput, ToolHistoryResponse, ToolListResponse, ToolTask } from "@/types/tools";
+import type { ToolApprovalPending, ToolCapabilitiesResponse, ToolDefinition, ToolExecutionInput, ToolHistoryResponse, ToolListResponse, ToolTask } from "@/types/tools";
 
 const TOOL_API_BASE_URL = process.env.NEXT_PUBLIC_TOOL_API_BASE_URL ?? "http://127.0.0.1:8000/api/tools";
 
@@ -18,7 +18,8 @@ export const ToolService = Object.freeze({
   get: (name: string): Promise<ToolDefinition> => request(`/${encodeURIComponent(name)}`),
   history: (): Promise<ToolHistoryResponse> => request("/history"),
   capabilities: (): Promise<ToolCapabilitiesResponse> => request("/capabilities"),
-  execute: (input: ToolExecutionInput): Promise<ToolTask> => request("/execute", {
+  /** A task, or (HTTP 202) a pending approval request when the call needs the operator's decision. */
+  execute: (input: ToolExecutionInput): Promise<ToolTask | ToolApprovalPending> => request("/execute", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   }),
 });

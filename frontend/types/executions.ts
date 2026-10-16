@@ -7,7 +7,9 @@ export type ExecutionStatus =
   | "failed"
   | "cancelled"
   /** The process stopped while the work was running; its outcome is unknown. */
-  | "interrupted";
+  | "interrupted"
+  /** Paused durably until the operator decides an approval request; nothing ran yet. */
+  | "waiting_approval";
 
 /** Server-computed retry eligibility; the UI never decides this itself. */
 export interface RetryInfo {

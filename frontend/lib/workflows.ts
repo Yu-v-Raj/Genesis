@@ -97,6 +97,8 @@ export function runActions(status: WorkflowStatus): RunAction[] {
     case "queued": return ["cancel"];
     case "running": return ["pause", "cancel"];
     case "paused": return ["resume", "cancel"];
+    // Decided in Approvals; the run continues on its own once the request is decided.
+    case "waiting_approval": return ["cancel"];
     case "interrupted": return ["retry", "cancel", "delete"];
     case "failed": return ["retry", "delete"];
     case "completed":
@@ -113,7 +115,7 @@ export type RunFilter = "all" | "active" | "attention" | "completed" | "cancelle
 export const RUN_FILTERS: readonly { value: RunFilter; label: string; statuses: readonly WorkflowStatus[] }[] = [
   { value: "all", label: "All runs", statuses: [] },
   { value: "active", label: "In progress", statuses: ["queued", "running", "paused"] },
-  { value: "attention", label: "Needs attention", statuses: ["failed", "interrupted"] },
+  { value: "attention", label: "Needs attention", statuses: ["failed", "interrupted", "waiting_approval"] },
   { value: "completed", label: "Completed", statuses: ["completed"] },
   { value: "not_started", label: "Not started", statuses: ["created"] },
   { value: "cancelled", label: "Cancelled", statuses: ["cancelled"] },

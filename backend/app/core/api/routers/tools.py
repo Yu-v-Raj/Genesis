@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from backend.app.core.api.dependencies.system import get_tool_runtime_manager
 from backend.app.core.api.schemas.tools import ToolCapabilitiesResponse, ToolExecuteRequest, ToolHistoryResponse, ToolListResponse, ToolResponse, TaskResponse
 from backend.app.core.tool_runtime.application.tool_manager import ToolRuntimeManager
+from backend.app.core.tool_runtime.domain.argument_limits import MAX_METADATA_BYTES, size_problem
 from backend.app.core.tool_runtime.domain.authorization import (
     AuthorizationOutcome,
     DenialReason,
@@ -56,6 +57,9 @@ _DENIAL_STATUS = {
 async def execute_tool(request: ToolExecuteRequest, manager: ToolManagerDependency) -> TaskResponse | JSONResponse:
     """Run one tool as an operator test. Genesis does not authenticate operators, so the
     call gets no identity and only what the policy allows any test run."""
+    metadata_problem = size_problem(request.metadata, max_bytes=MAX_METADATA_BYTES, what="The run's metadata")
+    if metadata_problem is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=metadata_problem)
     if request.execution_id is not None:
         # Attaching a test run to an execution would make it look like an Agent's call.
         raise HTTPException(
@@ -71,6 +75,18 @@ async def execute_tool(request: ToolExecuteRequest, manager: ToolManagerDependen
         )
     except ToolAuthorizationError as error:
         decision = error.decision
+        if decision.outcome is AuthorizationOutcome.APPROVAL_REQUIRED and decision.approval_id is not None:
+            # Nothing ran. The exact call waits for the operator in Approvals; approving it
+            # there runs it once. Repeating this request returns the same pending request.
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "detail": decision.message,
+                    "outcome": decision.outcome.value,
+                    "reason": decision.reason.value if decision.reason is not None else None,
+                    "approval_id": str(decision.approval_id),
+                },
+            )
         code = (
             status.HTTP_404_NOT_FOUND
             if decision.reason is DenialReason.TOOL_NOT_FOUND

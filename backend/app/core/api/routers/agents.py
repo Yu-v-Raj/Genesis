@@ -5,6 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 
 from backend.app.core.agent_runtime.application.agent_configuration_service import AgentConfigurationService
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
@@ -43,6 +44,7 @@ from backend.app.core.api.schemas.agents import (
     AgentSessionResponse,
     AgentSessionSummaryResponse,
 )
+from backend.app.core.execution_runtime.domain.work import SuspendedOutcome
 from backend.app.core.execution_runtime.application.execution_manager import ExecutionManager
 from backend.app.core.execution_runtime.domain.exceptions import AgentNotExecutableError, ExecutionAbortedError
 from backend.app.core.llm_runtime.domain.exceptions import (
@@ -242,10 +244,28 @@ async def chat(
     request is dropped, the work still finishes and its reply is saved to the session.
     """
     try:
+        if await executions.waiting_for_agent(agent_id):
+            # A paused turn must finish before the next one starts, or the conversation
+            # would interleave. It continues once its approval request is decided.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This Agent is waiting for your decision on a tool call. Approve or reject it in Approvals first.",
+            )
         session_id = await interaction.prepare(agent_id, request.session_id)
         execution, value = await executions.execute_and_wait(
             agent_id, metadata=chat_metadata(request.message, session_id)
         )
+        if isinstance(value, SuspendedOutcome):
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "status": "waiting_approval",
+                    "execution_id": str(execution.execution_id),
+                    "session_id": str(session_id),
+                    "approval_id": value.token,
+                    "detail": value.message,
+                },
+            )
         agent, response, summary = value  # type: ignore[misc]
         return AgentChatResponse.from_domain(agent, response, summary, execution_id=execution.execution_id)
     except (AgentNotFoundError, SessionNotFoundError) as error:

@@ -13,6 +13,11 @@ expired, i.e. whose worker stopped renewing:
   effect already happened, so it never re-runs this automatically. A user may retry it,
   which creates a new linked attempt; for work that may have side effects the retry must
   be explicitly acknowledged.
+
+Work can also suspend itself (``WorkSuspended``) until an operator decides an approval:
+it waits in WAITING_APPROVAL with its resume state checkpointed and no lease, so a
+restart loses nothing. Each dispatcher tick (and an approval listener) re-queues waiting
+work whose decision exists; the handler then resumes from the checkpoint.
 """
 
 import asyncio
@@ -49,7 +54,7 @@ from backend.app.core.execution_runtime.domain.lifecycle import (
     retry_decision,
 )
 from backend.app.core.execution_runtime.domain.transition import ExecutionTransition
-from backend.app.core.execution_runtime.domain.work import WorkOutcome
+from backend.app.core.execution_runtime.domain.work import ResumeGate, SuspendedOutcome, WorkOutcome, WorkSuspended
 from backend.app.core.observability.domain.events import (
     Event,
     ExecutionCancelled,
@@ -60,7 +65,9 @@ from backend.app.core.observability.domain.events import (
     ExecutionProgress,
     ExecutionQueued,
     ExecutionRecovered,
+    ExecutionResumed,
     ExecutionStarted,
+    ExecutionWaitingApproval,
 )
 
 
@@ -113,6 +120,15 @@ class ExecutionManager:
         self._dispatcher: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._closing = False
+        self._resume_gate: ResumeGate | None = None
+
+    def set_resume_gate(self, gate: ResumeGate) -> None:
+        """Attach the decision source suspended work waits on (bound once at startup)."""
+        self._resume_gate = gate
+
+    def wake(self, *_: object) -> None:
+        """Ask the dispatcher to look for work now (e.g. a decision was just recorded)."""
+        self._wake.set()
 
     @property
     def worker_id(self) -> str:
@@ -186,7 +202,40 @@ class ExecutionManager:
         task = self._running.get(execution_id)
         if task is not None and not task.done():
             task.cancel()
+        token = _waiting_token(current)
+        if current.status is ExecutionStatus.WAITING_APPROVAL and token is not None and self._resume_gate is not None:
+            await self._resume_gate.abandon(token, "The waiting work was cancelled.")
         return cancelled
+
+    async def waiting_for_agent(self, agent_id: UUID) -> tuple[Execution, ...]:
+        """This Agent's executions that are paused for an operator decision."""
+        return tuple(execution for execution in await self._repository.waiting() if execution.agent_id == agent_id)
+
+    async def resume_ready(self) -> tuple[Execution, ...]:
+        """Re-queue waiting work whose decision now exists. Safe to call repeatedly: the
+        compare-and-set transition lets exactly one caller re-queue each execution."""
+        if self._resume_gate is None:
+            return ()
+        resumed: list[Execution] = []
+        for waiting in await self._repository.waiting():
+            token = _waiting_token(waiting)
+            if token is None or not await self._resume_gate.is_resolved(token):
+                continue
+            try:
+                resumed.append(
+                    await self._transition(
+                        waiting,
+                        ExecutionStatus.QUEUED,
+                        ExecutionResumed,
+                        detail="resumed: the approval request was decided",
+                        current_step="resuming",
+                    )
+                )
+            except (PersistenceConflictError, ExecutionLifecycleError):
+                continue  # cancelled or resumed elsewhere
+        if resumed:
+            self._wake.set()
+        return tuple(resumed)
 
     async def retry_execution(self, execution_id: UUID, *, acknowledge_side_effects: bool = False) -> Execution:
         """Start a new attempt of a failed, cancelled, or interrupted execution."""
@@ -297,6 +346,7 @@ class ExecutionManager:
             try:
                 await self._renew_leases()
                 await self.recover()
+                await self.resume_ready()
                 while len(self._running) < self._concurrency and not self._closing:
                     claimed = await self._repository.claim_next(self._worker_id, self._lease_until())
                     if claimed is None:
@@ -361,6 +411,7 @@ class ExecutionManager:
                 agent_id=latest.agent_id,
                 metadata=latest.metadata,
                 report_progress=report_progress,
+                checkpoint=latest.checkpoint,
             )
             produced = await self._executor.execute(context)
             outcome = produced if isinstance(produced, WorkOutcome) else WorkOutcome(output=str(produced))
@@ -390,6 +441,24 @@ class ExecutionManager:
                     lease_expires_at=None,
                 )
             self._resolve_waiter(execution_id, error=ExecutionAbortedError("Genesis stopped before this work finished."))
+        except WorkSuspended as suspended:
+            current = await self._repository.get(execution_id)
+            if current is not None and current.status is ExecutionStatus.RUNNING:
+                try:
+                    await self._transition(
+                        current,
+                        ExecutionStatus.WAITING_APPROVAL,
+                        ExecutionWaitingApproval,
+                        detail="waiting for an operator decision",
+                        checkpoint={**current.checkpoint, **suspended.checkpoint, "awaiting": {"token": suspended.token}},
+                        current_step="awaiting approval",
+                        lease_owner=None,
+                        lease_expires_at=None,
+                    )
+                except (PersistenceConflictError, ExecutionLifecycleError):
+                    pass  # cancelled meanwhile; the cancel abandons the request
+            self._resolve_waiter(execution_id, value=SuspendedOutcome(token=suspended.token, message=suspended.message))
+            self._wake.set()  # the decision may already exist (e.g. an approved request)
         except (PersistenceConflictError, ExecutionLifecycleError):
             # Cancelled or resolved elsewhere; never overwrite a newer state.
             self._resolve_waiter(execution_id, error=ExecutionAbortedError("This work was cancelled."))
@@ -518,3 +587,9 @@ class ExecutionManager:
         if step is not None:
             payload["step"] = step
         await self._event_bus.publish(event_type(source="execution_manager", payload=payload))
+
+
+def _waiting_token(execution: Execution) -> str | None:
+    awaiting = execution.checkpoint.get("awaiting")
+    token = awaiting.get("token") if isinstance(awaiting, Mapping) else None
+    return token if isinstance(token, str) else None

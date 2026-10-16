@@ -101,6 +101,11 @@ class ExecutionHistory(ExecutionRepository):
                 if e.status in _LEASED and (e.lease_expires_at is None or e.lease_expires_at < now)
             )
 
+    async def waiting(self) -> tuple[Execution, ...]:
+        with self._lock:
+            found = [e for e in self._executions.values() if e.status is ExecutionStatus.WAITING_APPROVAL]
+        return tuple(sorted(found, key=lambda e: e.created_at))
+
     def _record(self, previous: ExecutionStatus | None, execution: Execution, detail: str | None) -> None:
         timeline = self._timeline.setdefault(execution.execution_id, [])
         timeline.append(

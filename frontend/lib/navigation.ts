@@ -5,7 +5,7 @@
  * (tests/navigation.test.ts enforces it). Kept free of React so it can be unit tested.
  */
 
-export type NavIconName = "overview" | "agents" | "memory" | "workflows" | "operations" | "tools" | "providers";
+export type NavIconName = "overview" | "agents" | "memory" | "workflows" | "operations" | "approvals" | "tools" | "providers";
 
 export interface NavItem {
   label: string;
@@ -38,6 +38,7 @@ export const NAVIGATION: readonly NavGroup[] = [
     items: [
       // The URL stays /monitoring; only the label changed.
       { label: "Operations", href: "/monitoring", icon: "operations", description: "Executions, events, logs and services." },
+      { label: "Approvals", href: "/approvals", icon: "approvals", description: "Decide tool calls that need your approval." },
       { label: "Tools", href: "/tools", icon: "tools", description: "Capabilities Agents can call." },
       { label: "Providers", href: "/providers", icon: "providers", description: "Model providers and whether they answer." },
     ],

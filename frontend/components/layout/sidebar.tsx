@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Bot, BrainCircuit, Cpu, LayoutGrid, PanelLeftClose, PanelLeftOpen, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Bot, BrainCircuit, Cpu, LayoutGrid, PanelLeftClose, PanelLeftOpen, ShieldCheck, Workflow, Wrench, type LucideIcon } from "lucide-react";
 import { GenesisMark } from "@/components/brand/genesis-mark";
 import { IconButton } from "@/components/ui/button";
 import { NAVIGATION, isActivePath, type NavIconName } from "@/lib/navigation";
@@ -17,6 +17,7 @@ const ICONS: Record<NavIconName, LucideIcon> = {
   operations: Activity,
   tools: Wrench,
   providers: Cpu,
+  approvals: ShieldCheck,
 };
 
 /*

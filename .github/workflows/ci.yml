@@ -64,6 +64,7 @@ jobs:
           backend/app/core/execution_runtime/infrastructure
           backend/app/core/workflow_runtime/infrastructure
           backend/app/core/memory/infrastructure
+          backend/app/core/approval_gateway/infrastructure
 
       - name: Migrations on SQLite (upgrade, drift check, downgrade, upgrade)
         env:

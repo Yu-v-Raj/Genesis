@@ -8,7 +8,10 @@ lifecycle, the safety gate, Tool Runtime, and atomic session commits exactly as 
 from collections.abc import Mapping
 from uuid import UUID
 
-from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
+from backend.app.core.agent_runtime.application.agent_interaction_service import (
+    AgentInteractionService,
+    TurnAwaitingApproval,
+)
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.domain.exceptions import (
     AgentLifecycleError,
@@ -18,7 +21,7 @@ from backend.app.core.agent_runtime.domain.exceptions import (
 from backend.app.core.core_services.persistence import PersistenceConflictError, PersistenceError
 from backend.app.core.execution_runtime.domain.execution import Execution
 from backend.app.core.execution_runtime.domain.execution_context import ExecutionContext
-from backend.app.core.execution_runtime.domain.work import RecoveryVerdict, WorkOutcome
+from backend.app.core.execution_runtime.domain.work import RecoveryVerdict, WorkOutcome, WorkSuspended
 from backend.app.core.llm_runtime.domain.exceptions import (
     LLMConfigurationError,
     LLMProviderError,
@@ -29,6 +32,9 @@ from backend.app.core.llm_runtime.domain.models import MessageRole
 
 
 CHAT_KIND = "chat"
+# Checkpoint key holding a chat turn paused for an approval decision. It contains the turn's
+# messages (including tool arguments), so the API never returns it.
+PAUSED_TURN_KEY = "pending_turn"
 
 
 def chat_metadata(message: str, session_id: UUID) -> dict[str, object]:
@@ -45,13 +51,22 @@ class ChatWorkHandler:
         message = context.metadata.get("message")
         if not isinstance(message, str) or not message.strip():
             raise ValueError("A chat execution needs a message.")
-        agent, response, summary = await self._interaction.chat_with_summary(
-            context.agent_id,
-            message,
-            _session_id(context.metadata),
-            execution_id=context.execution_id,
-            progress=context.report_progress,
-        )
+        paused = context.checkpoint.get(PAUSED_TURN_KEY)
+        try:
+            agent, response, summary = await self._interaction.chat_with_summary(
+                context.agent_id,
+                message,
+                _session_id(context.metadata),
+                execution_id=context.execution_id,
+                progress=context.report_progress,
+                resume=paused if isinstance(paused, Mapping) else None,
+            )
+        except TurnAwaitingApproval as waiting:
+            raise WorkSuspended(
+                token=str(waiting.approval_id),
+                checkpoint={PAUSED_TURN_KEY: waiting.state, "step": f"approval:{waiting.tool_name}"},
+                message=str(waiting),
+            ) from None
         return WorkOutcome(output=response.content or "", value=(agent, response, summary))
 
     def may_have_side_effects(self, metadata: Mapping[str, object], checkpoint: Mapping[str, object]) -> bool:

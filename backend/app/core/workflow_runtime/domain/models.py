@@ -14,14 +14,17 @@ def utc_now() -> datetime:
 
 class WorkflowStatus(StrEnum):
     """State of one workflow run. INTERRUPTED: the process stopped while a step with possible
-    side effects was running, so a person must decide whether to retry it."""
-    CREATED = "created"; QUEUED = "queued"; RUNNING = "running"; PAUSED = "paused"; COMPLETED = "completed"; FAILED = "failed"; CANCELLED = "cancelled"; INTERRUPTED = "interrupted"
+    side effects was running, so a person must decide whether to retry it. WAITING_APPROVAL:
+    nothing else can run until the operator decides a step's approval request (distinct
+    from PAUSED, which is an operator pause)."""
+    CREATED = "created"; QUEUED = "queued"; RUNNING = "running"; PAUSED = "paused"; COMPLETED = "completed"; FAILED = "failed"; CANCELLED = "cancelled"; INTERRUPTED = "interrupted"; WAITING_APPROVAL = "waiting_approval"
 
 
 class WorkflowTaskStatus(StrEnum):
     """State of one step in a run. INTERRUPTED: it was running when the process stopped and
-    its outcome is unknown."""
-    PENDING = "pending"; READY = "ready"; RUNNING = "running"; COMPLETED = "completed"; FAILED = "failed"; CANCELLED = "cancelled"; BLOCKED = "blocked"; INTERRUPTED = "interrupted"
+    its outcome is unknown. WAITING_APPROVAL: its tool call needs the operator's approval;
+    nothing ran yet."""
+    PENDING = "pending"; READY = "ready"; RUNNING = "running"; COMPLETED = "completed"; FAILED = "failed"; CANCELLED = "cancelled"; BLOCKED = "blocked"; INTERRUPTED = "interrupted"; WAITING_APPROVAL = "waiting_approval"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -40,6 +43,8 @@ class WorkflowTask:
     result: object | None = None
     error: str | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
+    # The approval request this step's tool call waits on (or last waited on).
+    approval_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str) or not self.task_id.strip(): raise ValueError("Workflow task IDs must be non-empty strings.")

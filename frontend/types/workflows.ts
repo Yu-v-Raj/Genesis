@@ -1,8 +1,8 @@
 import type { RetryInfo } from "@/types/executions";
 import type { RealtimeEvent } from "@/types/realtime";
 
-export type WorkflowStatus = "created" | "queued" | "running" | "paused" | "completed" | "failed" | "cancelled" | "interrupted";
-export type WorkflowTaskStatus = "pending" | "ready" | "running" | "completed" | "failed" | "cancelled" | "blocked" | "interrupted";
+export type WorkflowStatus = "created" | "queued" | "running" | "paused" | "completed" | "failed" | "cancelled" | "interrupted" | "waiting_approval";
+export type WorkflowTaskStatus = "pending" | "ready" | "running" | "completed" | "failed" | "cancelled" | "blocked" | "interrupted" | "waiting_approval";
 
 export interface WorkflowTask {
   task_id: string;
@@ -18,6 +18,8 @@ export interface WorkflowTask {
   result: unknown | null;
   error: string | null;
   metadata: Record<string, unknown>;
+  /** The approval request this step waits on (or last waited on). */
+  approval_id?: string | null;
 }
 
 export interface WorkflowDefinition {

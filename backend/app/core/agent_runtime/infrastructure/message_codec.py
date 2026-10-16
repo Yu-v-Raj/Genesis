@@ -89,3 +89,8 @@ def _decode_value(value: object) -> object:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+# Public names for callers outside this module (e.g. a paused chat turn's checkpoint).
+encode_tool_call = _encode_tool_call
+decode_tool_call = _decode_tool_call

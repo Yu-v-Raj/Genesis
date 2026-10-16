@@ -6,10 +6,11 @@ from collections.abc import Mapping
 from threading import RLock
 from uuid import UUID
 
-from backend.app.core.approval_gateway.domain.approval import ApprovalGateway
+from backend.app.core.approval_gateway.domain.approval import ApprovalGateway, ApprovalOutcome, ApprovalState
 from backend.app.core.core_services.event_bus import EventBus
 from backend.app.core.observability.domain.events import TaskCompleted, TaskCreated, TaskFailed, ToolRejected
 from backend.app.core.tool_runtime.application.authorization_policy import (
+    MESSAGES,
     AgentToolGrants,
     ToolAuthorizationPolicy,
     WorkflowStepGrants,
@@ -18,6 +19,8 @@ from backend.app.core.tool_runtime.application.authorization_policy import (
 from backend.app.core.tool_runtime.application.tool_executor import ToolExecutor
 from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
 from backend.app.core.tool_runtime.domain.authorization import (
+    AuthorizationOutcome,
+    DenialReason,
     ToolAuthorizationDecision,
     ToolAuthorizationError,
     ToolExecutionContext,
@@ -56,6 +59,7 @@ class ToolRuntimeManager:
         self._registry = registry
         self._executor = executor
         self._event_bus = event_bus
+        self._approvals = approvals
         self._policy = ToolAuthorizationPolicy(registry, approvals=approvals)
         self._history_size = history_size
         self._tasks: dict[UUID, Task] = {}
@@ -75,8 +79,12 @@ class ToolRuntimeManager:
         self._policy.bind_workflow_steps(source)
 
     def arguments_are_valid(self, tool_name: str, arguments: Mapping[str, object]) -> bool:
-        """Check arguments against the tool's schema, e.g. when a workflow step is defined."""
+        """Check arguments against the size limits and the tool's schema."""
         return self._policy.validate_arguments(self._registry.get(tool_name), arguments)
+
+    def argument_problem(self, tool_name: str, arguments: Mapping[str, object]) -> str | None:
+        """Why arguments can't be used with a tool, e.g. when a workflow step is defined."""
+        return self._policy.argument_problem(self._registry.get(tool_name), arguments)
 
     async def authorize(
         self, *, tool_name: str, arguments: Mapping[str, object] | None = None, context: ToolExecutionContext
@@ -104,9 +112,24 @@ class ToolRuntimeManager:
         decision = await self.authorize(tool_name=tool_name, arguments=arguments, context=context)
         if not decision.allowed:
             raise ToolAuthorizationError(tool_name, decision)
+        approval_id = decision.approval_id
+        if approval_id is not None:
+            # The single use of the approval, atomically, after the policy was re-evaluated
+            # just above. A concurrent caller, an expiry or a cancellation makes this fail.
+            if self._approvals is None or decision.operation_digest is None or not await self._approvals.consume(
+                approval_id, decision.operation_digest
+            ):
+                refused = ToolAuthorizationDecision(
+                    outcome=AuthorizationOutcome.APPROVAL_REQUIRED,
+                    reason=DenialReason.APPROVAL_UNUSABLE,
+                    message=MESSAGES[DenialReason.APPROVAL_UNUSABLE],
+                    approval_id=approval_id,
+                )
+                await self._publish_rejected(context, tool_name, refused)
+                raise ToolAuthorizationError(tool_name, refused)
         trusted: dict[str, object] = {"caller": context.caller.value, **subject(context)}
         if decision.approval_id is not None:
-            trusted["approval_id"] = decision.approval_id
+            trusted["approval_id"] = str(decision.approval_id)
         if metadata:
             trusted[CALLER_METADATA_KEY] = dict(metadata)
         metadata = trusted
@@ -135,12 +158,40 @@ class ToolRuntimeManager:
             # The caller (e.g. a cancelled workflow worker) abandoned the invocation; record
             # a terminal snapshot so history never shows a task stuck in "running".
             await self._record_cancelled(running)
+            if approval_id is not None:
+                await self._record_approval_outcome(approval_id, task.task_id, ApprovalOutcome.UNKNOWN, "The call was cancelled while the tool was running; its effect is unknown.")
             raise
         status = TaskStatus.COMPLETED if result.status is ToolResultStatus.COMPLETED else TaskStatus.FAILED
         completed = running.with_updates(status=status, finished_at=utc_now(), result=result)
         self._save(completed)
+        if approval_id is not None:
+            await self._record_approval_outcome(
+                approval_id,
+                task.task_id,
+                ApprovalOutcome.COMPLETED if status is TaskStatus.COMPLETED else ApprovalOutcome.FAILED,
+                None if status is TaskStatus.COMPLETED else "The tool ran and reported a failure.",
+            )
         await self._publish(TaskCompleted if status is TaskStatus.COMPLETED else TaskFailed, completed)
         return completed
+
+    async def _record_approval_outcome(self, approval_id: UUID, task_id: UUID, outcome: ApprovalOutcome, detail: str | None) -> None:
+        if self._approvals is None:
+            return
+        try:
+            await self._approvals.record_outcome(approval_id, task_id=task_id, outcome=outcome, detail=detail)
+        except (Exception, asyncio.CancelledError):
+            pass  # the task snapshot is authoritative; the approval keeps "outcome unknown"
+
+    # ------------------------------------------------------------ approval helpers
+
+    async def approval_state(self, approval_id: UUID) -> ApprovalState | None:
+        """Current state of a request a caller is waiting on (None if unknown or no gateway)."""
+        return None if self._approvals is None else await self._approvals.state_of(approval_id)
+
+    async def cancel_approval(self, approval_id: UUID, *, reason: str) -> None:
+        """Abandon a request whose operation will no longer run (no-op if already final)."""
+        if self._approvals is not None:
+            await self._approvals.cancel(approval_id, reason=reason)
 
     async def _record_cancelled(self, task: Task) -> None:
         finished_at = utc_now()
@@ -213,4 +264,6 @@ class ToolRuntimeManager:
         }
         if caller is not None:
             payload.update(subject(context))
+        if decision.approval_id is not None:
+            payload["approval_id"] = str(decision.approval_id)
         await self._event_bus.publish(ToolRejected(source="tool_authorization", payload=payload))

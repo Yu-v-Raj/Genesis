@@ -8,6 +8,7 @@ from sqlalchemy.engine import Connection
 
 # Importing the ORM modules registers their tables on Base.metadata.
 from backend.app.core.agent_runtime.infrastructure import orm as _agent_orm  # noqa: F401
+from backend.app.core.approval_gateway.infrastructure import orm as _approval_orm  # noqa: F401
 from backend.app.core.execution_runtime.infrastructure import orm as _execution_orm  # noqa: F401
 from backend.app.core.memory.infrastructure import orm as _memory_orm  # noqa: F401
 from backend.app.core.workflow_runtime.infrastructure import orm as _workflow_orm  # noqa: F401

@@ -55,6 +55,7 @@ def test_system_services_returns_registered_core_services(client: TestClient) ->
         "ToolRegistry",
         "ToolExecutor",
         "ToolRuntimeManager",
+        "ApprovalService",
         "PluginManager",
             "MemoryManager",
             "MemoryProvider",
@@ -96,5 +97,5 @@ def test_system_tools_reports_the_live_tool_runtime(client: TestClient) -> None:
 
     assert response.status_code == 200
     tools = response.json()["tools"]
-    assert [tool["name"] for tool in tools] == ["echo", "calculator", "uuid", "random_number", "delay"]
+    assert [tool["name"] for tool in tools] == ["echo", "calculator", "uuid", "random_number", "delay", "simulated_action"]
     assert all(tool["status"] == "online" and tool["description"] for tool in tools)

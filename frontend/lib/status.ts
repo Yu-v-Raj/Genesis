@@ -39,6 +39,11 @@ const STATUSES: Readonly<Record<string, StatusPresentation>> = {
   rejected: { tone: "danger", label: "Rejected", active: false },
   // Workflow tasks
   blocked: { tone: "warning", label: "Blocked", active: false },
+  // Approvals, and work paused for one. "Approved" means a decision, not that anything ran.
+  waiting_approval: { tone: "warning", label: "Waiting for approval", active: false },
+  approved: { tone: "info", label: "Approved", active: false },
+  consumed: { tone: "success", label: "Used", active: false },
+  expired: { tone: "neutral", label: "Expired", active: false },
   // Services and health
   healthy: { tone: "success", label: "Healthy", active: false },
   online: { tone: "success", label: "Online", active: false },

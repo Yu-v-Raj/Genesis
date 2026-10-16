@@ -25,7 +25,7 @@ from backend.app.database.base import Base
 
 JSONType = JSON().with_variant(JSONB(), "postgresql")
 SerialId = BigInteger().with_variant(Integer(), "sqlite")
-EXECUTION_STATUSES = "('pending', 'queued', 'starting', 'running', 'completed', 'failed', 'cancelled', 'interrupted')"
+EXECUTION_STATUSES = "('pending', 'queued', 'starting', 'running', 'completed', 'failed', 'cancelled', 'interrupted', 'waiting_approval')"
 
 
 class ExecutionRow(Base):

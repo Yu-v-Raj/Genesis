@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from backend.app.core.api.routers.agents import router as agents_router
+from backend.app.core.api.routers.approvals import router as approvals_router
 from backend.app.core.api.routers.executions import router as executions_router
 from backend.app.core.api.routers.tools import router as tools_router
 from backend.app.core.api.routers.observability import router as observability_router
@@ -25,3 +26,4 @@ api_router.include_router(system_router)
 api_router.include_router(memory_router)
 api_router.include_router(workflows_router)
 api_router.include_router(llm_router)
+api_router.include_router(approvals_router)

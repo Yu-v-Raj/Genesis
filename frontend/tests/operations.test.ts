@@ -6,7 +6,7 @@ import type { LLMModelOption } from "../types/agents.ts";
 import type { RealtimeEvent } from "../types/realtime.ts";
 import { describeEvent, eventCategory, isRoutineEvent } from "../lib/activity.ts";
 import {
-  EXECUTION_LIST_LIMIT, STATUS_GROUPS, countLabel, errorCategoryLabel, executionKind, filterExecutions, filtersFromParams, formatDuration,
+  EXECUTION_LIST_LIMIT, STATUS_GROUPS, countLabel, errorCategoryExplanation, errorCategoryLabel, executionKind, filterExecutions, filtersFromParams, formatDuration,
   hasActiveFilters, operationsQuery, relativeTime, summarizeAgents, summarizeExecutions,
 } from "../lib/operations.ts";
 import { providerReadiness } from "../lib/providers.ts";
@@ -26,7 +26,7 @@ function event(event_type: string, payload: RealtimeEvent["payload"], timestamp 
 }
 
 test("status groups cover every execution status exactly once", () => {
-  const all: ExecutionStatus[] = ["pending", "queued", "starting", "running", "completed", "failed", "cancelled", "interrupted"];
+  const all: ExecutionStatus[] = ["pending", "queued", "starting", "running", "completed", "failed", "cancelled", "interrupted", "waiting_approval"];
   const grouped = Object.values(STATUS_GROUPS).flat();
   assert.deepEqual([...grouped].sort(), [...all].sort());
 });
@@ -144,5 +144,18 @@ test("error categories read as plain language", () => {
   assert.equal(errorCategoryLabel("provider_error"), "Model provider error");
   assert.equal(errorCategoryLabel("interrupted"), "Interrupted by a restart");
   assert.equal(errorCategoryLabel("new_category"), "new category");
+  assert.equal(errorCategoryLabel(null), null);
+});
+
+test("a policy refusal reads differently from a tool failure, and other labels are unchanged", () => {
+  assert.equal(errorCategoryLabel("tool_denied"), "Refused by tool policy");
+  assert.match(errorCategoryExplanation("tool_denied") ?? "", /before the tool ran, so nothing was executed/);
+  assert.doesNotMatch(errorCategoryExplanation("tool_denied") ?? "", /approval/i);  // a refusal isn't a rejected approval
+  assert.equal(errorCategoryLabel("tool_failed"), "Tool failed");
+  assert.match(errorCategoryExplanation("tool_failed") ?? "", /started running/);
+  assert.equal(errorCategoryExplanation("timeout"), null);
+  assert.equal(errorCategoryLabel("provider_error"), "Model provider error");
+  assert.equal(errorCategoryLabel("interrupted"), "Interrupted by a restart");
+  assert.equal(errorCategoryLabel("something_new"), "something new");
   assert.equal(errorCategoryLabel(null), null);
 });

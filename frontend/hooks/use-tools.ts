@@ -11,7 +11,11 @@ const time = (task: ToolTask) => new Date(task.finished_at ?? task.started_at ??
 const sortTasks = (tasks: ToolTask[]) => [...tasks].sort((a, b) => time(b) - time(a));
 const message = (error: unknown) => (error instanceof ToolApiError ? error.message : "The Tool Runtime request could not be completed.");
 
-export type TestRunResult = { task: ToolTask; error: null } | { task: null; error: string };
+export type TestRunResult =
+  | { task: ToolTask; error: null; approvalId?: undefined }
+  | { task: null; error: string; approvalId?: undefined }
+  /** Held for the operator's decision; nothing ran. */
+  | { task: null; error: null; approvalId: string; detail: string };
 
 export interface ToolsState {
   tools: ToolDefinition[];
@@ -62,7 +66,9 @@ export function useTools(realtime: RealtimeState): ToolsState {
   const execute = useCallback(async (toolName: string, arguments_: Record<string, unknown>): Promise<TestRunResult> => {
     setPendingToolNames((current) => new Set(current).add(toolName));
     try {
-      const task = await ToolService.execute({ tool_name: toolName, arguments: arguments_ });
+      const response = await ToolService.execute({ tool_name: toolName, arguments: arguments_ });
+      if ("approval_id" in response) return { task: null, error: null, approvalId: response.approval_id, detail: response.detail };
+      const task = response;
       setTasks((current) => sortTasks([task, ...current.filter((item) => item.task_id !== task.task_id)]));
       return { task, error: null };
     } catch (caught) {

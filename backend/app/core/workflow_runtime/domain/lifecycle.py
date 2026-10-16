@@ -3,13 +3,16 @@
 Run:
 ```text
 CREATED -> QUEUED -> RUNNING <-> PAUSED
+                       |-> WAITING_APPROVAL --decision--> QUEUED
                        |-> COMPLETED                     (final)
                        |-> FAILED      --retry--> QUEUED
                        |-> INTERRUPTED --retry--> QUEUED  (uncertain step; needs a decision)
                        '-> QUEUED                         (recovery: nothing uncertain)
 any non-final -> CANCELLED                               (final)
 ```
-Step: PENDING -> READY -> RUNNING -> COMPLETED | FAILED; dependents of a failed step become
+Step: PENDING -> READY -> RUNNING -> COMPLETED | FAILED; RUNNING -> WAITING_APPROVAL when its
+tool call needs the operator's approval (nothing ran), then PENDING once approved (it runs
+again and consumes the approval) or FAILED if rejected, expired or cancelled; dependents of a failed step become
 BLOCKED; a step running when the process stopped becomes INTERRUPTED unless its tool is
 side-effect free, in which case it simply returns to PENDING. A retry resets FAILED,
 BLOCKED, CANCELLED, and INTERRUPTED steps to PENDING and never re-runs COMPLETED steps.
@@ -35,8 +38,10 @@ ALLOWED_RUN_TRANSITIONS: dict[WorkflowStatus, frozenset[WorkflowStatus]] = {
             WorkflowStatus.CANCELLED,
             WorkflowStatus.INTERRUPTED,
             WorkflowStatus.QUEUED,
+            WorkflowStatus.WAITING_APPROVAL,
         }
     ),
+    WorkflowStatus.WAITING_APPROVAL: frozenset({WorkflowStatus.QUEUED, WorkflowStatus.CANCELLED}),
     WorkflowStatus.PAUSED: frozenset(
         {WorkflowStatus.RUNNING, WorkflowStatus.QUEUED, WorkflowStatus.CANCELLED, WorkflowStatus.INTERRUPTED}
     ),

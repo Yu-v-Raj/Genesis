@@ -32,6 +32,7 @@ const NAV_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   "/monitoring": ["operations", "monitoring", "executions", "runs", "events", "logs", "services"],
   "/tools": ["tool", "capabilities", "calculator"],
   "/providers": ["provider", "models", "llm", "gemini", "openai", "api key"],
+  "/approvals": ["approval", "approve", "reject", "pending", "decision", "consent", "permission"],
 };
 
 export function buildCommands(navItems: readonly NavItem[], sidebarCollapsed: boolean): Command[] {

@@ -11,3 +11,4 @@ class ToolCapability(StrEnum):
     IDENTIFIER_GENERATION = "identifier_generation"
     RANDOM_NUMBER = "random_number"
     DELAY = "delay"
+    SIMULATION = "simulation"

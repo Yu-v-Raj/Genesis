@@ -23,6 +23,7 @@ from backend.app.core.execution_runtime.domain.exceptions import (
     ExecutionRetryError,
 )
 from backend.app.core.execution_runtime.domain.execution import Execution
+from backend.app.core.tool_runtime.domain.argument_limits import MAX_METADATA_BYTES, size_problem
 
 
 router = APIRouter(tags=["executions"])
@@ -40,6 +41,10 @@ async def execute_agent(
     manager: ExecutionManagerDependency,
 ) -> ExecutionResponse:
     """Durably queue work for an initialized Agent."""
+    # Checked before the execution (and its metadata, e.g. tool arguments) is stored.
+    too_large = size_problem(request.metadata, max_bytes=MAX_METADATA_BYTES, what="The execution's metadata")
+    if too_large is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=too_large)
     try:
         return _response(manager, await manager.execute(agent_id, metadata=request.metadata))
     except AgentNotFoundError as error:

@@ -22,7 +22,10 @@ class ExecutionContext:
     cancel_requested: bool = False
     # Persists a checkpoint before a risky step (e.g. a tool call). Supplied by the worker.
     report_progress: ProgressReporter | None = None
+    # The stored checkpoint when the work starts; non-empty when resuming suspended work.
+    checkpoint: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "variables", MappingProxyType(dict(self.variables)))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "checkpoint", MappingProxyType(dict(self.checkpoint)))

@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     WORKER_CONCURRENCY: int = Field(default=4, ge=1)
     # How many of the most recent complete turns of a conversation are sent to the model.
     AGENT_CONTEXT_MAX_TURNS: int = Field(default=20, ge=1)
+    # How long an approval request stays valid (pending, or approved but not yet used).
+    APPROVAL_TTL_SECONDS: float = Field(default=3600.0, gt=0)
     OPENAI_API_KEY: SecretStr | None = None
     OPENAI_MODEL: str = "gpt-4.1-mini"
     OPENAI_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)

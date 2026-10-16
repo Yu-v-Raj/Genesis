@@ -20,6 +20,40 @@ class WorkOutcome:
     value: object = None
 
 
+class WorkSuspended(Exception):
+    """Raised by a handler to pause durably until an external decision exists.
+
+    The worker stores ``checkpoint`` (everything needed to resume, merged into the
+    execution's checkpoint), moves the execution to WAITING_APPROVAL without a lease, and
+    re-queues it once the ``ResumeGate`` reports ``token`` resolved. The handler then runs
+    again with that checkpoint in its context.
+    """
+
+    def __init__(self, token: str, checkpoint: Mapping[str, object], message: str) -> None:
+        super().__init__(message)
+        self.token = token
+        self.checkpoint = dict(checkpoint)
+        self.message = message
+
+
+@dataclass(frozen=True, slots=True)
+class SuspendedOutcome:
+    """Handed to an in-process waiter (e.g. the HTTP chat request) when work suspends."""
+
+    token: str
+    message: str
+
+
+class ResumeGate(Protocol):
+    """Answers whether the decision a suspended execution waits on exists yet."""
+
+    async def is_resolved(self, token: str) -> bool: ...
+
+    async def abandon(self, token: str, reason: str) -> None:
+        """The waiting work was cancelled; the decision it waited on is no longer needed."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class RecoveryVerdict:
     """A handler's finding about work whose worker stopped while it was RUNNING."""

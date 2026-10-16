@@ -18,3 +18,5 @@ class ExecutionStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     INTERRUPTED = "interrupted"
+    # Paused durably until an operator decides an approval request; no lease is held.
+    WAITING_APPROVAL = "waiting_approval"

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, CheckCircle2, ChevronRight, LoaderCircle, ShieldX, Square, Wrench, XCircle } from "lucide-react";
 
@@ -11,6 +12,7 @@ import { Markdown } from "@/components/ui/markdown";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { LiveStep } from "@/lib/agent-directory";
 import { toolStepLabel, type ConversationTurn, type ToolStep } from "@/lib/agent-experience";
+import { awaitedApproval } from "@/lib/approvals";
 import { statusText } from "@/lib/durable-work";
 import { errorCategoryLabel, formatDuration, operationsQuery } from "@/lib/operations";
 import { cn } from "@/lib/utils";
@@ -145,6 +147,42 @@ export function UnfinishedTurn({ execution, onRetry }: { execution: Execution; o
         {execution.error && <p className="break-words leading-5 text-muted-foreground">{execution.error}</p>}
         <p className="text-[11px] text-subtle"><RunLink executionId={execution.execution_id} /></p>
         <RetryControl retry={execution.retry} onRetry={onRetry} />
+      </div>
+    </article>
+  );
+}
+
+/**
+ * A message whose turn paused before a tool call that needs the operator's approval.
+ * Nothing has run; the turn continues on its own once the request is decided.
+ */
+export function WaitingTurn({ execution, onCancel }: { execution: Execution; onCancel: () => Promise<string | null> }) {
+  const message = typeof execution.metadata.message === "string" ? execution.metadata.message : "";
+  const approvalId = awaitedApproval(execution.checkpoint);
+  const [cancelling, setCancelling] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  return (
+    <article className="flex flex-col gap-3" aria-label="Message waiting for your approval">
+      {message && <UserMessage>{message}</UserMessage>}
+      <div className="ml-10 flex flex-col gap-2 rounded-md border tone-warning tone-border bg-surface p-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge status="waiting_approval" />
+          <span className="text-foreground">The Agent wants to run a tool that needs your approval. Nothing has run yet.</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {approvalId && (
+            <Link href={`/approvals?approval=${encodeURIComponent(approvalId)}`} className="inline-flex items-center gap-0.5 font-medium text-accent hover:underline">
+              Review it in Approvals<ArrowUpRight aria-hidden className="h-3 w-3" />
+            </Link>
+          )}
+          <Button size="sm" variant="ghost" loading={cancelling} onClick={async () => {
+            setCancelling(true);
+            setProblem(await onCancel());
+            setCancelling(false);
+          }}>Cancel this message</Button>
+          <RunLink executionId={execution.execution_id} />
+        </div>
+        {problem && <p className="text-danger">{problem}</p>}
       </div>
     </article>
   );

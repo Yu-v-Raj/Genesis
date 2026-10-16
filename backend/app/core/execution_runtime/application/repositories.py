@@ -49,3 +49,7 @@ class ExecutionRepository(ABC):
     @abstractmethod
     async def expired_leases(self, now: datetime) -> tuple[Execution, ...]:
         """STARTING/RUNNING executions whose owner stopped renewing (or never had a lease)."""
+
+    @abstractmethod
+    async def waiting(self) -> tuple[Execution, ...]:
+        """Executions suspended in WAITING_APPROVAL, oldest first."""

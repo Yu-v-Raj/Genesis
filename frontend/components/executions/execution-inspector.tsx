@@ -10,7 +10,7 @@ import { Disclosure, JsonView } from "@/components/ui/disclosure";
 import { Alert, Skeleton } from "@/components/ui/feedback";
 import { StatusBadge, StatusDot } from "@/components/ui/status-badge";
 import { describeTransition, executionLabel, isActive, isChat } from "@/lib/durable-work";
-import { errorCategoryLabel, executionKind, formatDuration, kindLabel } from "@/lib/operations";
+import { errorCategoryExplanation, errorCategoryLabel, executionKind, formatDuration, kindLabel } from "@/lib/operations";
 import { statusPresentation } from "@/lib/status";
 import { ExecutionApiError, ExecutionService } from "@/services/execution.service";
 import { ToolService } from "@/services/tool.service";
@@ -164,6 +164,7 @@ export function ExecutionInspector({
       {execution.status === "failed" && (
         <Alert tone="danger">
           <p className="font-medium">{category ? `Failed: ${category}` : "Failed"}</p>
+          {errorCategoryExplanation(execution.error_category) && <p className="mt-1 text-xs leading-5 text-muted-foreground">{errorCategoryExplanation(execution.error_category)}</p>}
           {execution.error && <p className="mt-1 break-words text-xs leading-5 text-foreground/85">{execution.error}</p>}
         </Alert>
       )}

@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Calculator, Dices, Fingerprint, MessageSquare, Search, ShieldAlert, Timer, Wrench, X, type LucideIcon } from "lucide-react";
+import { Calculator, Dices, Fingerprint, FlaskConical, MessageSquare, Search, ShieldAlert, Timer, Wrench, X, type LucideIcon } from "lucide-react";
 
 import { RealtimeNotifications } from "@/components/dashboard/realtime-notifications";
 import { ToolDetail } from "@/components/tools/tool-detail";
@@ -21,7 +21,7 @@ import { agentsAllowing, availableFilters, filterTools, toolLabel, type Availabi
 import { cn } from "@/lib/utils";
 import type { ToolDefinition } from "@/types/tools";
 
-const ICONS: Record<string, LucideIcon> = { calculator: Calculator, echo: MessageSquare, uuid: Fingerprint, random_number: Dices, delay: Timer };
+const ICONS: Record<string, LucideIcon> = { calculator: Calculator, echo: MessageSquare, uuid: Fingerprint, random_number: Dices, delay: Timer, simulated_action: FlaskConical };
 type Tab = "tools" | "runs";
 const TAB_PREFIX = "tools";
 

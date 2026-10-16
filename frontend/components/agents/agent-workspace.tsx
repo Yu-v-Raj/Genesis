@@ -7,7 +7,7 @@ import { Activity, ArrowLeft, BrainCircuit, ChevronDown, CirclePlay, CircleStop,
 
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { Composer } from "@/components/agents/composer";
-import { LiveTurn, SavedTurn, UnfinishedTurn } from "@/components/agents/conversation-turn";
+import { LiveTurn, SavedTurn, UnfinishedTurn, WaitingTurn } from "@/components/agents/conversation-turn";
 import { Button, IconButton, buttonClasses } from "@/components/ui/button";
 import { Alert, Skeleton } from "@/components/ui/feedback";
 import { Menu, type MenuEntry } from "@/components/ui/menu";
@@ -62,6 +62,8 @@ export function AgentWorkspace({ agent, readiness, conversation, liveExecution, 
   const sessionId = own ? conversation.sessionId : null;
   const sessions = conversation.sessions.filter((item) => item.agent_id === agent.id);
   const unfinished = own ? conversation.unfinished.filter((execution) => execution.agent_id === agent.id) : [];
+  // A paused turn that has since resumed shows as the live turn instead.
+  const waiting = own ? conversation.waiting.filter((execution) => execution.agent_id === agent.id && execution.execution_id !== liveExecution?.execution_id) : [];
   const executions = conversation.executions.filter((execution) => execution.agent_id === agent.id);
   // Until a conversation has loaded, show loading rather than an empty welcome that would
   // wrongly suggest the Agent has no history.
@@ -73,7 +75,20 @@ export function AgentWorkspace({ agent, readiness, conversation, liveExecution, 
   const liveMessage = pending ? pendingMessage : liveExecution && typeof liveExecution.metadata.message === "string" ? liveExecution.metadata.message : null;
   const steps = liveMessage !== null ? liveTurnSteps(liveExecution) : [];
   const canChat = readiness?.canChat === true;
-  const disabledReason = canChat ? null : readiness?.detail ?? "Loading…";
+  const disabledReason = !canChat
+    ? readiness?.detail ?? "Loading…"
+    : waiting.length > 0 ? "Decide the pending approval first; this conversation continues after it." : null;
+
+  // When a live turn ends (e.g. one that resumed after an approval), show its saved result.
+  const lastLiveId = useRef<string | null>(null);
+  const liveId = liveExecution?.execution_id ?? null;
+  const { reload, refreshExecutions } = conversation;
+  useEffect(() => {
+    if (lastLiveId.current !== null && liveId !== lastLiveId.current) {
+      queueMicrotask(() => { void reload(); void refreshExecutions(); });
+    }
+    lastLiveId.current = liveId;
+  }, [liveId, reload, refreshExecutions]);
   const actions = lifecycleActionsFor(agent.status);
   const now = new Date();
 
@@ -205,6 +220,10 @@ export function AgentWorkspace({ agent, readiness, conversation, liveExecution, 
             <LiveTurn message={liveMessage} agentName={agent.name} steps={steps} execution={liveExecution} cancelling={cancelling}
               onCancel={liveExecution ? () => onCancelRun(liveExecution.execution_id) : null} />
           )}
+
+          {!pending && waiting.map((execution) => (
+            <WaitingTurn key={execution.execution_id} execution={execution} onCancel={() => conversation.cancelWaiting(execution.execution_id)} />
+          ))}
 
           {!pending && unfinished.map((execution) => (
             <UnfinishedTurn key={execution.execution_id} execution={execution} onRetry={(acknowledge) => conversation.retryUnfinished(execution.execution_id, acknowledge)} />

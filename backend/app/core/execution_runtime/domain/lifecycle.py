@@ -4,6 +4,7 @@
 PENDING -> QUEUED -> STARTING -> RUNNING -> COMPLETED | FAILED
               ^          |           \\-> INTERRUPTED   (process lost mid-work)
               '----------'  recovery: claimed but never started -> back to QUEUED
+RUNNING -> WAITING_APPROVAL -> QUEUED      (paused for an operator decision, then resumed)
 any non-terminal -> CANCELLED
 ```
 """
@@ -38,8 +39,11 @@ ALLOWED_TRANSITIONS: dict[ExecutionStatus, frozenset[ExecutionStatus]] = {
             ExecutionStatus.FAILED,
             ExecutionStatus.CANCELLED,
             ExecutionStatus.INTERRUPTED,
+            ExecutionStatus.WAITING_APPROVAL,
         }
     ),
+    # Resumed (re-queued) once the decision exists, or cancelled while waiting.
+    ExecutionStatus.WAITING_APPROVAL: frozenset({ExecutionStatus.QUEUED, ExecutionStatus.CANCELLED}),
     **{status: frozenset() for status in TERMINAL_STATUSES},
 }
 

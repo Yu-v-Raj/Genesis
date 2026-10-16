@@ -5,6 +5,7 @@ from typing import cast
 from fastapi import Depends
 from starlette.requests import HTTPConnection
 
+from backend.app.core.approval_gateway.application.approval_service import ApprovalService
 from backend.app.core.core_services.service_registry import ServiceRegistry
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.agent_configuration_service import AgentConfigurationService
@@ -131,3 +132,10 @@ def get_llm_manager(
 ) -> LLMManager:
     """Resolve the app-scoped provider-neutral LLM Runtime manager."""
     return registry.resolve(LLMManager)
+
+
+def get_approval_service(
+    registry: ServiceRegistry = Depends(get_service_registry),
+) -> ApprovalService:
+    """Resolve the Approval Gateway service."""
+    return registry.resolve(ApprovalService)

@@ -12,6 +12,9 @@ from backend.app.core.execution_runtime.domain.lifecycle import RetryDecision
 from backend.app.core.execution_runtime.domain.transition import ExecutionTransition
 
 
+_PRIVATE_CHECKPOINT_KEYS = frozenset({"pending_turn"})
+
+
 class ExecutionResultResponse(BaseModel):
     """External representation of a terminal execution result."""
 
@@ -89,7 +92,8 @@ class ExecutionResponse(BaseModel):
             retry_of=execution.retry_of,
             retry=None if retry is None else RetryInfoResponse.from_decision(retry),
             metadata=dict(execution.metadata),
-            checkpoint=dict(execution.checkpoint),
+            # A paused chat turn's stored messages (with tool arguments) never leave the backend.
+            checkpoint={key: value for key, value in execution.checkpoint.items() if key not in _PRIVATE_CHECKPOINT_KEYS},
         )
 
 

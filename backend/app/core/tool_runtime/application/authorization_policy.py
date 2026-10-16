@@ -10,8 +10,13 @@ to a tool implementation. Checks run in a fixed order and the first failure deci
    operator test run (no identity, nothing extra granted);
 4. every permission the tool declares can actually be enforced (today only ``none``);
 5. the arguments satisfy the tool's declared schema;
-6. a tool that declares side effects has an approval decision for this exact operation.
-   No Approval Gateway exists yet, so such tools are held as ``approval_required``.
+6. a tool that declares side effects (or doesn't declare) needs an APPROVED, unconsumed
+   approval for this exact operation: tool contract, canonical arguments and the caller's
+   real identifiers. Without one, the gateway opens (or reuses) a PENDING request and the
+   call is held as ``approval_required``. Without a gateway, nothing can be approved.
+
+Evaluating never consumes an approval. ``ToolRuntimeManager.execute`` consumes it, once,
+right before the tool runs, after evaluating this policy again at that moment.
 
 What an Agent or workflow step may do is read from their owning runtimes through the
 ports below, never from the caller. A port that was never bound denies its callers.
@@ -24,8 +29,9 @@ from types import MappingProxyType
 from typing import Protocol
 from uuid import UUID
 
-from backend.app.core.approval_gateway.domain.approval import ApprovalGateway, ApprovalRequest, ApprovalStatus
+from backend.app.core.approval_gateway.domain.approval import ApprovalGateway, OperationBinding, tool_contract_digest
 from backend.app.core.tool_runtime.application.tool_registry import ToolRegistry
+from backend.app.core.tool_runtime.domain.argument_limits import size_problem
 from backend.app.core.tool_runtime.domain.argument_schema import matches_schema
 from backend.app.core.tool_runtime.domain.authorization import (
     AgentToolContext,
@@ -56,9 +62,12 @@ MESSAGES: Mapping[DenialReason, str] = MappingProxyType({
     DenialReason.STEP_MISMATCH: "The tool call doesn't match what this workflow step defines.",
     DenialReason.PERMISSION_UNENFORCEABLE: "This tool requires permissions Genesis can't check yet, so it can't run.",
     DenialReason.INVALID_ARGUMENTS: "The tool arguments are invalid.",
+    DenialReason.ARGUMENTS_TOO_LARGE: "The tool arguments are too large.",
     DenialReason.APPROVAL_REQUIRED: (
-        "This tool can affect things outside Genesis and needs a person's approval, which Genesis can't request yet."
+        "This tool can affect things outside Genesis, so this exact call needs the operator's approval. "
+        "It is waiting in Approvals."
     ),
+    DenialReason.APPROVAL_UNUSABLE: "The approval for this call was already used, expired, or no longer matches it.",
     DenialReason.APPROVAL_DENIED: "Running this tool was not approved.",
 })
 
@@ -107,13 +116,27 @@ class ToolAuthorizationPolicy:
         self._workflows = _bind(self._workflows, source, "workflow")
 
     def validate_arguments(self, tool: Tool, arguments: Mapping[str, object]) -> bool:
-        return matches_schema(arguments, tool.definition.parameters)
+        return size_problem(arguments) is None and matches_schema(arguments, tool.definition.parameters)
+
+    def argument_problem(self, tool: Tool, arguments: Mapping[str, object]) -> str | None:
+        """Why these arguments can't be used with this tool (a limit or the schema), or None."""
+        too_large = size_problem(arguments)
+        if too_large is not None:
+            return too_large
+        return None if matches_schema(arguments, tool.definition.parameters) else MESSAGES[DenialReason.INVALID_ARGUMENTS]
 
     async def evaluate(
         self, context: ToolExecutionContext, tool_name: str, arguments: Mapping[str, object]
     ) -> ToolAuthorizationDecision:
         if not isinstance(context, (AgentToolContext, WorkflowToolContext, OperatorTestContext)):
             return _deny(AuthorizationOutcome.NOT_ALLOWED, DenialReason.INVALID_CONTEXT)
+        # Size first: oversized input is refused before any lookup, comparison or approval
+        # request touches it.
+        too_large = size_problem(arguments)
+        if too_large is not None:
+            return ToolAuthorizationDecision(
+                outcome=AuthorizationOutcome.INVALID_REQUEST, reason=DenialReason.ARGUMENTS_TOO_LARGE, message=too_large
+            )
         try:
             tool = self._registry.get(tool_name)
         except ToolNotFoundError:
@@ -134,7 +157,7 @@ class ToolAuthorizationPolicy:
             return _deny(AuthorizationOutcome.INVALID_REQUEST, DenialReason.INVALID_ARGUMENTS)
 
         if tool.definition.side_effects is not False:
-            return await self._approval(context, tool_name, arguments)
+            return await self._approval(context, tool, arguments)
         return ToolAuthorizationDecision(outcome=AuthorizationOutcome.ALLOWED)
 
     async def _eligibility(
@@ -163,18 +186,55 @@ class ToolAuthorizationPolicy:
         return None  # operator test runs: no identity, so no per-caller grant to check
 
     async def _approval(
-        self, context: ToolExecutionContext, tool_name: str, arguments: Mapping[str, object]
+        self, context: ToolExecutionContext, tool: Tool, arguments: Mapping[str, object]
     ) -> ToolAuthorizationDecision:
         if self._approvals is None:
-            return _deny(AuthorizationOutcome.APPROVAL_REQUIRED, DenialReason.APPROVAL_REQUIRED)
-        decision = await self._approvals.decide(
-            ApprovalRequest(caller=context.caller.value, tool_name=tool_name, arguments=arguments, subject=subject(context))
+            return ToolAuthorizationDecision(
+                outcome=AuthorizationOutcome.APPROVAL_REQUIRED,
+                reason=DenialReason.APPROVAL_REQUIRED,
+                message="This tool can affect things outside Genesis and needs the operator's approval, which isn't available here.",
+            )
+        try:
+            binding = operation_binding(context, tool, arguments)
+        except ValueError:
+            return _deny(AuthorizationOutcome.INVALID_REQUEST, DenialReason.INVALID_ARGUMENTS)
+        reason = (
+            "This tool declares that it can affect things outside Genesis."
+            if tool.definition.side_effects is True
+            else "This tool doesn't declare whether it has side effects, so it is treated as if it does."
         )
-        if decision.status is ApprovalStatus.APPROVED and decision.approval_id:
-            return ToolAuthorizationDecision(outcome=AuthorizationOutcome.ALLOWED, approval_id=decision.approval_id)
-        if decision.status is ApprovalStatus.DENIED:
-            return _deny(AuthorizationOutcome.NOT_ALLOWED, DenialReason.APPROVAL_DENIED)
-        return _deny(AuthorizationOutcome.APPROVAL_REQUIRED, DenialReason.APPROVAL_REQUIRED)
+        resolution = await self._approvals.resolve(binding, reason=reason)
+        if resolution.approved:
+            return ToolAuthorizationDecision(
+                outcome=AuthorizationOutcome.ALLOWED,
+                approval_id=resolution.approval_id,
+                operation_digest=resolution.operation_digest,
+            )
+        return ToolAuthorizationDecision(
+            outcome=AuthorizationOutcome.APPROVAL_REQUIRED,
+            reason=DenialReason.APPROVAL_REQUIRED,
+            message=MESSAGES[DenialReason.APPROVAL_REQUIRED],
+            approval_id=resolution.approval_id,
+            operation_digest=resolution.operation_digest,
+        )
+
+
+def operation_binding(context: ToolExecutionContext, tool: Tool, arguments: Mapping[str, object]) -> OperationBinding:
+    """The exact operation an approval covers: who asks, with which identifiers, to run
+    which tool contract with which canonical arguments."""
+    definition = tool.definition
+    return OperationBinding(
+        caller=context.caller.value,
+        subject=subject(context),
+        tool_name=definition.name,
+        tool_version=definition.version,
+        tool_contract=tool_contract_digest(
+            definition.parameters,
+            side_effects=definition.side_effects,
+            permissions=tuple(str(permission) for permission in definition.permissions),
+        ),
+        arguments=arguments,
+    )
 
 
 def subject(context: ToolExecutionContext) -> dict[str, str]:

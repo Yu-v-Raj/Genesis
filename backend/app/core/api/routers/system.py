@@ -46,6 +46,7 @@ SERVICE_METADATA = {
     "RuntimeLifecycleManager": "Controls the Genesis runtime lifecycle.",
     "AgentRegistry": "Tracks Agent Runtime metadata.",
     "AgentManager": "Coordinates Agent Runtime lifecycle and context.",
+    "ApprovalService": "Records operator decisions for side-effecting tool calls.",
 }
 
 PLUGIN_DEFAULT = {

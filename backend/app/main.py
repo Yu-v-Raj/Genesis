@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.app.core.api.local_request_guard import LocalRequestGuard
+from backend.app.core.approval_gateway.application.approval_service import ApprovalService
+from backend.app.core.approval_gateway.application.resume_gate import ApprovalResumeGate
+from backend.app.core.approval_gateway.infrastructure.sqlalchemy_repository import SqlAlchemyApprovalRepository
 from backend.app.core.api.router import api_router
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
@@ -96,10 +99,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     tool_manager = ToolManager()
     tool_registry = ToolRegistry(event_bus)
     tool_executor = ToolExecutor(tool_registry, event_bus)
-    tool_runtime_manager = ToolRuntimeManager(tool_registry, tool_executor, event_bus)
+    # The durable Approval Gateway: every side-effecting tool call needs an operator's
+    # approval for that exact operation, consumed once at the execution boundary.
+    approval_service = ApprovalService(
+        SqlAlchemyApprovalRepository(session_factory), event_bus, ttl_seconds=settings.APPROVAL_TTL_SECONDS
+    )
+    tool_runtime_manager = ToolRuntimeManager(tool_registry, tool_executor, event_bus, approvals=approval_service)
     for tool in builtin_tools():
         await tool_runtime_manager.register(tool)
     execution_executor.set_tool_manager(tool_runtime_manager)
+    execution_manager.set_resume_gate(ApprovalResumeGate(approval_service))
+    approval_service.add_listener(execution_manager.wake)
     plugin_manager = PluginManager()
     memory_provider = SqlAlchemyMemoryProvider(session_factory)
     memory_manager = MemoryManager(memory_provider, event_bus)
@@ -113,6 +123,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         lease_seconds=settings.WORKER_LEASE_SECONDS,
         concurrency=settings.WORKER_CONCURRENCY,
     )
+    approval_service.add_listener(workflow_manager.wake)
     llm_provider_registry = LLMProviderRegistry()
     llm_provider_registry.register(OpenAIProvider(settings))
     llm_provider_registry.register(GeminiProvider(settings))
@@ -158,6 +169,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service_registry.register_singleton(ToolRegistry, tool_registry)
     service_registry.register_singleton(ToolExecutor, tool_executor)
     service_registry.register_singleton(ToolRuntimeManager, tool_runtime_manager)
+    service_registry.register_singleton(ApprovalService, approval_service)
     service_registry.register_singleton(PluginManager, plugin_manager)
     service_registry.register_singleton(MemoryManager, memory_manager)
     service_registry.register_singleton(MemoryProvider, memory_provider)
@@ -188,6 +200,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "ToolRegistry",
         "ToolExecutor",
         "ToolRuntimeManager",
+        "ApprovalService",
         "PluginManager",
         "MemoryManager",
         "MemoryProvider",

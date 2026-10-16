@@ -82,6 +82,7 @@ export const TEST_FIELDS: Readonly<Record<string, readonly TestField[]>> = {
     { name: "max", label: "Maximum", helper: "Whole number, inclusive.", type: "number", placeholder: "100", integer: true },
   ],
   delay: [{ name: "seconds", label: "Seconds", helper: "From 0 to 60.", type: "number", placeholder: "2", min: 0, max: 60 }],
+  simulated_action: [{ name: "note", label: "Note", helper: "Any text. Nothing leaves Genesis.", type: "text", placeholder: "Try the approval flow" }],
   uuid: [],
 };
 

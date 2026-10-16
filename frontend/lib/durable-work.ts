@@ -12,6 +12,7 @@ type AnyStatus = ExecutionStatus | WorkflowStatus | WorkflowTaskStatus;
 /** Fuller wording for durable work, where the short badge label needs context. */
 const DESCRIPTIONS: Partial<Record<AnyStatus, string>> = {
   interrupted: "Interrupted — needs a decision",
+  waiting_approval: "Waiting for your approval",
   created: "Not started",
   blocked: "Blocked by a failed step",
 };
@@ -74,6 +75,12 @@ export function startedTools(execution: Execution): string[] {
   const started = execution.checkpoint?.tools_started;
   if (!Array.isArray(started)) return [];
   return started.map((tool) => (tool && typeof tool === "object" && typeof (tool as { name?: unknown }).name === "string" ? (tool as { name: string }).name : "tool"));
+}
+
+/** Chat turns in this session paused for the operator's approval of a tool call. */
+export function waitingChats(executions: Execution[], sessionId: string | null): Execution[] {
+  if (sessionId === null) return [];
+  return executions.filter((execution) => isChat(execution) && execution.metadata.session_id === sessionId && execution.status === "waiting_approval");
 }
 
 /**

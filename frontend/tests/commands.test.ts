@@ -11,7 +11,7 @@ const key = (overrides: Partial<ShortcutEvent>): ShortcutEvent => ({ key: "k", m
 test("navigation commands come from the shared navigation, one per destination", () => {
   const go = commands.filter((command) => command.group === "Go to");
   assert.deepEqual(go.map((command) => command.href), NAV_ITEMS.map((item) => item.href));
-  assert.deepEqual(go.map((command) => command.label), ["Overview", "Agents", "Memory", "Workflows", "Operations", "Tools", "Providers"]);
+  assert.deepEqual(go.map((command) => command.label), ["Overview", "Agents", "Memory", "Workflows", "Operations", "Approvals", "Tools", "Providers"]);
 });
 
 test("actions only open existing flows or change a local preference", () => {

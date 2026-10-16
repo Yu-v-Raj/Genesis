@@ -5,9 +5,11 @@ from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+from uuid import NAMESPACE_URL, uuid5
+
 import pytest
 
-from backend.app.core.approval_gateway.domain.approval import ApprovalDecision, ApprovalRequest, ApprovalStatus
+from backend.app.core.approval_gateway.domain.approval import ApprovalResolution, ApprovalState, OperationBinding
 from backend.app.core.agent_runtime.application.agent_interaction_service import AgentInteractionService
 from backend.app.core.agent_runtime.application.agent_manager import AgentManager
 from backend.app.core.agent_runtime.application.agent_registry import AgentRegistry
@@ -38,12 +40,24 @@ from backend.app.core.tool_runtime.domain.tool_status import ToolResultStatus
 
 
 class ApprovedForThisTest:
-    """Stands in for a Milestone 2 approval decision so the crash-recovery path of a
-    side-effecting tool can still be exercised. Production wires no approval gateway, so
-    outside tests like this one such tools are held as approval_required."""
+    """Stands in for a recorded operator approval so the crash-recovery path of a
+    side-effecting tool can still be exercised. Confined to this test module: production
+    uses the durable Approval Gateway, where nothing is approved without an operator."""
 
-    async def decide(self, request: ApprovalRequest) -> ApprovalDecision:
-        return ApprovalDecision(status=ApprovalStatus.APPROVED, approval_id=f"test-approval:{request.tool_name}")
+    async def resolve(self, binding: OperationBinding, *, reason: str) -> ApprovalResolution:
+        return ApprovalResolution(approval_id=uuid5(NAMESPACE_URL, binding.digest), state=ApprovalState.APPROVED, operation_digest=binding.digest)
+
+    async def consume(self, approval_id, operation_digest) -> bool:
+        return True
+
+    async def record_outcome(self, approval_id, **_: object) -> None:
+        return None
+
+    async def state_of(self, approval_id) -> ApprovalState:
+        return ApprovalState.APPROVED
+
+    async def cancel(self, approval_id, *, reason: str) -> None:
+        return None
 
 
 LEASE = 0.2

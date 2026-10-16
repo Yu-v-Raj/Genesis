@@ -45,7 +45,7 @@ Genesis is in **active development** and is meant to run **locally, for a single
 - Chat turns, tool work and workflow runs are durable records with lifecycle states, checkpoints and crash recovery. Work that may have had an external effect is never silently re-run.
 - Each runtime is a separate module with its own domain model, and the runtimes communicate through typed events. The console reads the same APIs and event stream any other client would.
 
-**Stage.** The core runtimes, persistence, recovery, the tool-authorization policy and the redesigned console are implemented and tested. Authentication, a human approval workflow, multi-Agent coordination and plugin isolation are **not** implemented yet; see [Current limitations](#current-limitations) and [Roadmap](#roadmap).
+**Stage.** The core runtimes, persistence, recovery, the tool-authorization policy, a durable Approval Gateway and the redesigned console are implemented and tested. Authentication, multi-Agent coordination and plugin isolation are **not** implemented yet; see [Current limitations](#current-limitations) and [Roadmap](#roadmap).
 
 ---
 
@@ -55,7 +55,8 @@ Genesis is in **active development** and is meant to run **locally, for a single
 |---|---|---|
 | **Agents** | Create, configure (model, instructions, allowed tools), initialize, stop, delete. Directory with search and status. Multi-session conversations. | No authentication; any local client can manage any Agent. |
 | **Conversations** | Each message runs as a durable execution. The model may call tools, up to 5 rounds per turn. Replies render safe Markdown; failed turns show their reason and can be retried. | No streaming responses. |
-| **Tool execution** | Built-in tools: `echo`, `calculator`, `uuid`, `random_number`, `delay`. One authorization policy for every caller, strict argument validation, and a bounded calculator. | Tools that declare side effects are blocked until an Approval Gateway exists (none of the built-ins declare them). |
+| **Tool execution** | Built-in tools: `echo`, `calculator`, `uuid`, `random_number`, `delay`, and `simulated_action` (does nothing outside Genesis but declares side effects, to try approvals safely). One authorization policy for every caller, strict argument validation, and a bounded calculator. | Tools run in the backend process with no isolation. |
+| **Approvals** | Every call to a tool that declares side effects pauses until the operator approves that exact call (tool, arguments and caller). Requests are durable and single-use, and expire after `APPROVAL_TTL_SECONDS`. Paused chat turns and workflow steps resume on their own once decided. | Decisions record the local channel, not a person: Genesis has no accounts. |
 | **Memory** | Agent-scoped records (fact, note, preference, context) with tags. Create, edit, delete and search, persisted in the database. The newest memories are added to each conversation's context. | Search is case-insensitive substring matching, not semantic search. |
 | **Workflows** | Versioned definitions of tool steps with dependencies. Runs execute ready steps in parallel and can be started, paused, resumed, cancelled, retried and deleted. Crash recovery. | Steps call tools directly, with a workflow identity and no Agent. The console cannot edit or delete saved definitions. |
 | **Model providers** | OpenAI and Google Gemini adapters behind one provider interface, with a manual test request from the console. | "Configured" means a key is present, not that requests succeed. |
@@ -125,7 +126,7 @@ All paths are under `backend/app/core/`.
 | LLM Runtime | `llm_runtime/` | Provider registry, provider-neutral request and response models, error classification, and the OpenAI and Gemini adapters (`infrastructure/`). |
 | Observability | `observability/` | Typed event classes, bounded in-memory event history, the logger service (logs are published as events), and a heartbeat. |
 | Realtime | `realtime/` | Forwards EventBus events to WebSocket clients on `/ws/events`. |
-| Approval Gateway | `approval_gateway/` | **Contract only** (`domain/approval.py`). No gateway is implemented or wired, so operations that need approval are always blocked. |
+| Approval Gateway | `approval_gateway/` | Durable approval requests: the state machine and operation binding (`domain/approval.py`), `ApprovalService` (resolve, decide, consume once, expire, cancel), and the SQLAlchemy repository. Wired into the Tool Runtime, the Execution Runtime (paused chat turns) and the Workflow Runtime (paused steps). |
 | Legacy / scaffolding | `tool_manager/`, `workflow_engine/`, `plugin_system/`, `communication/`, `contracts/`, `core_services/auth/` | `tool_manager/` and `workflow_engine/` are earlier subsystems that are still instantiated but hold no tools or workflows, and no route runs them. `plugin_system/` is instantiated but loads no plugins. The other three are empty packages. |
 
 ### Design boundaries
@@ -156,7 +157,7 @@ Genesis/
 │   │   │   ├── llm_runtime/
 │   │   │   ├── observability/
 │   │   │   ├── realtime/
-│   │   │   ├── approval_gateway/   #   contract only
+│   │   │   ├── approval_gateway/   #   durable approval requests and decisions
 │   │   │   └── core_services/      #   config, logging, DI registry, EventBus, persistence helpers
 │   │   └── database/               # Engine, sessions, transactions, startup schema check
 │   └── conftest.py                 # Test isolation: a fresh migrated SQLite database per test
@@ -247,9 +248,7 @@ Then edit `.env`:
 
   Relative SQLite paths resolve from the repository root, so the backend and Alembic use the same file. For PostgreSQL, create a database first (for example `createdb genesis`) and keep `DATABASE_URL=postgresql+asyncpg://localhost:5432/genesis`, adding credentials if your server needs them.
 - **Model providers (optional).** Set `GEMINI_API_KEY` and/or `OPENAI_API_KEY`. Keys stay on the server and are never returned by the API.
-- **`.env.example` notes.**
-  - The template contains `HOST=0.0.0.0`, but the backend does not read `HOST` or `PORT`. The address comes from the `uvicorn` command in step 5, which binds to `127.0.0.1` by default.
-  - Its comment about "any localhost port" in development is out of date; see [Configuration reference](#configuration-reference).
+- **Listen address.** The backend doesn't read `HOST` or `PORT`. The address comes from the `uvicorn` command in step 5, which binds to `127.0.0.1` by default.
 
 ### 4. Create the database schema
 
@@ -318,6 +317,7 @@ Backend settings come from environment variables and the root `.env` file (envir
 | `WORKER_CONCURRENCY` | Executions or runs one process works on at once. | `4` |
 | `AGENT_CONTEXT_MAX_TURNS` | Most recent complete conversation turns sent to the model. | `20` |
 | `EVENT_HISTORY_SIZE` | Events (including logs) kept in memory for the API. | `1000` |
+| `APPROVAL_TTL_SECONDS` | How long an approval request stays valid, whether pending or approved but not yet used. After that it expires and the call does not run. | `3600` |
 | `HEARTBEAT_INTERVAL_SECONDS` | Interval of the system heartbeat event. | `30` |
 | `LOG_LEVEL` | Backend log level. | `INFO` |
 | `ENVIRONMENT`, `APP_NAME`, `APP_VERSION`, `APP_DESCRIPTION` | Application metadata. | `development`, `Genesis`, `0.1.0`, … |
@@ -326,7 +326,7 @@ Backend settings come from environment variables and the root `.env` file (envir
 
 **Serving the frontend from another port.** Add the exact origin, for example `CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]`. Keep `TRUSTED_HOSTS` loopback-only. Opening the backend to other hosts is a network exposure, not a port change.
 
-**Frontend API addresses (optional).** The console calls `http://127.0.0.1:8000` by default. You can override this with `NEXT_PUBLIC_*` variables in `frontend/.env.local`: `NEXT_PUBLIC_AGENT_API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_EVENT_API_BASE_URL`, `NEXT_PUBLIC_EXECUTION_API_BASE_URL`, `NEXT_PUBLIC_LLM_API_BASE_URL`, `NEXT_PUBLIC_MEMORY_API_BASE_URL`, `NEXT_PUBLIC_TOOL_API_BASE_URL`, `NEXT_PUBLIC_WORKFLOW_API_BASE_URL`, `NEXT_PUBLIC_WORKFLOW_DEFINITION_API_BASE_URL` and `NEXT_PUBLIC_REALTIME_URL`. Never put secrets in `NEXT_PUBLIC_*` variables: they are shipped to the browser.
+**Frontend API addresses (optional).** The console calls `http://127.0.0.1:8000` by default. You can override this with `NEXT_PUBLIC_*` variables in `frontend/.env.local`: `NEXT_PUBLIC_AGENT_API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_EVENT_API_BASE_URL`, `NEXT_PUBLIC_EXECUTION_API_BASE_URL`, `NEXT_PUBLIC_LLM_API_BASE_URL`, `NEXT_PUBLIC_MEMORY_API_BASE_URL`, `NEXT_PUBLIC_TOOL_API_BASE_URL`, `NEXT_PUBLIC_WORKFLOW_API_BASE_URL`, `NEXT_PUBLIC_WORKFLOW_DEFINITION_API_BASE_URL`, `NEXT_PUBLIC_APPROVAL_API_BASE_URL` and `NEXT_PUBLIC_REALTIME_URL`. Never put secrets in `NEXT_PUBLIC_*` variables: they are shipped to the browser.
 
 ---
 
@@ -341,6 +341,7 @@ Backend settings come from environment variables and the root `.env` file (envir
 | `/monitoring` | **Operations**: executions (with timeline, retry and cancel), events, logs and system services. | `?tab=executions\|events\|logs\|system`, `?execution=`, plus `status`, `agent`, `kind` and `q` filters |
 | `/tools` | **Tools**: catalogue, details (inputs, which Agents may use each tool, restrictions), operator test runs and recent runs. | `?tool=`, `?tab=runs` |
 | `/providers` | **Model providers**: configuration state, observed results and a manual test request. | none |
+| `/approvals` | **Approvals**: requests that need a decision, and history (approved, rejected, expired, cancelled, used). Each shows the exact call, who asked, why, the deadline and what deciding will do. | `?approval=`, `?tab=history` |
 
 Any other path shows a not-found page inside the console.
 
@@ -363,6 +364,8 @@ Any other path shows a not-found page inside the console.
    - **Tool requests:** if the model asks for tools, each request is authorized (see below), the Agent's progress is checkpointed, the tool runs, and its result goes back to the model. This repeats for at most 5 rounds.
 4. The completed turn is stored in the session atomically. A failed turn leaves the conversation unchanged and is listed with its reason and a **Retry** action.
 
+If a requested tool needs approval, the turn **pauses**: the turn so far is saved in the execution's checkpoint, the execution waits in `waiting_approval` (holding no worker), and the chat request returns `202`. Once the request is decided, the turn resumes. If it was approved, the exact call runs once; if it was rejected, expired or cancelled, the model is told it didn't run. Either way the turn then continues. This survives restarts.
+
 If the process stops mid-turn, recovery checks the stored evidence. A turn proven to have finished is marked completed; anything else is marked **interrupted**. Retrying an interrupted turn needs explicit acknowledgement only if its checkpoint shows a side-effecting tool had started; otherwise it is an ordinary retry. Queued work that never started simply runs after the restart.
 
 ### Workflows
@@ -375,6 +378,7 @@ If the process stops mid-turn, recovery checks the stored evidence. A turn prove
   - in-flight steps of side-effect-free tools return to pending;
   - in-flight steps of tools that may have side effects become **interrupted**, and the run waits for a person.
 - **Identity.** Steps run with a workflow context, not as an Agent.
+- **Approval.** A step whose tool needs approval waits in `waiting_approval`, without running, while other independent steps continue. When nothing else can progress, the run waits in `waiting_approval`, which is distinct from `paused`, and holds no lease. Approval re-queues it, and the step runs once. A rejected, expired or cancelled request fails the step and blocks its dependents. Cancelling the run cancels its open requests. A retry is a new attempt and needs a new approval.
 
 ```mermaid
 stateDiagram-v2
@@ -382,6 +386,9 @@ stateDiagram-v2
     created --> queued: start
     queued --> running: worker claims the lease
     running --> paused: pause
+    running --> waiting_approval: a step needs approval and nothing else can run
+    waiting_approval --> queued: the request is decided
+    waiting_approval --> cancelled: cancel
     paused --> running: resume
     paused --> queued: resume when no local worker holds the run
     running --> queued: recovery after a lost lease (side-effect-free steps reset)
@@ -450,9 +457,10 @@ flowchart TD
     P5 -- no --> R
     P5 -- yes --> P6{"Tool declares side effects?<br/>(undeclared counts as yes)"}
     P6 -- no --> T["Create task, run tool,<br/>task.completed / task.failed"]
-    P6 -- yes --> P7{"Approval record for this exact operation?<br/>(no Approval Gateway is wired today)"}
-    P7 -- no --> R2["Refused: approval_required"]
-    P7 -- yes --> T
+    P6 -- yes --> P7{"Approved, unused, unexpired request<br/>for this exact operation?"}
+    P7 -- no --> R2["Held: a pending request is opened (or reused)<br/>and the caller waits; nothing runs"]
+    P7 -- yes --> C1["Consume the approval atomically (once)"]
+    C1 --> T
 ```
 
 **Details that matter:**
@@ -463,7 +471,9 @@ flowchart TD
   - Undeclared arguments are rejected unless the schema allows them, and numbers must be finite.
   - Any other JSON Schema keyword (`enum`, `pattern`, `format`, …) is unsupported. A tool that uses one is refused **at registration**, so it never looks usable.
 - **Permissions.** The only permission that can be enforced is `none`. A tool declaring anything else, or an empty list, cannot run.
+- **Size limits.** Tool arguments may be at most 64 KiB serialized, with strings up to 16,384 characters, lists up to 1,000 items, objects up to 256 fields (names up to 256 characters) and 16 levels of nesting. Metadata attached to a test run or an execution may be at most 16 KiB. Oversized input is refused before any approval request, execution record or tool run, and never truncated. Operations shows a refused call as "Refused by tool policy", which is distinct from "Tool failed".
 - **Calculator limits.** It refuses expressions over 200 characters or 64 nodes, and results over 4,096 bits, before computing them. This keeps one request from blocking the server.
+- **Approval is per operation and single-use.** A request binds a digest of the caller, its real identifiers (the Agent and execution, or the workflow run, step and attempt), the tool's name, version and declared contract, and the canonical arguments. Only `ToolRuntimeManager.execute` consumes an approval: atomically, after evaluating the full policy again, immediately before the tool runs. An approval never overrides the other checks; a changed allowlist, a disabled tool or changed arguments means it isn't used.
 - **Caller metadata cannot impersonate.** Metadata a caller supplies is stored under `caller_metadata`. The server writes every identity and approval field itself.
 - **Limit of the policy.** It governs entry points into the Tool Runtime. It does **not** isolate tool code from the backend process or from other code running in it.
 
@@ -472,7 +482,7 @@ flowchart TD
 ## Database, migrations and persistence
 
 - **Engines.** SQLite and PostgreSQL. CI runs the persistence tests and every migration on both.
-- **Migrations.** Managed by Alembic (`alembic.ini`, `infra/migrations/versions/`; current head `0004`). Apply them with `alembic upgrade head`. `alembic check` reports drift between the models and the migrations.
+- **Migrations.** Managed by Alembic (`alembic.ini`, `infra/migrations/versions/`; current head `0005`). Apply them with `alembic upgrade head`. `alembic check` reports drift between the models and the migrations.
 - **Startup check.** The backend verifies that the database is reachable and at the expected revision before serving.
 
 | Data | Storage | Survives a restart? |
@@ -481,6 +491,7 @@ flowchart TD
 | Executions, their state timelines and checkpoints | Database | Yes; interrupted work is recovered as described above |
 | Workflow definitions (all versions), runs and steps | Database | Yes |
 | Memories | Database | Yes |
+| Approval requests, decisions and outcomes | Database | Yes; a pending request stays pending, and an approved one is used only by its own waiting work |
 | Tool run history (`/api/tools/history`) | In memory, last 1,000 tasks | No |
 | Events and logs (`/api/events`, `/api/logs`) | In memory, last `EVENT_HISTORY_SIZE` events | No |
 | A chat reply being generated | In memory | No; the execution becomes interrupted or retryable |
@@ -537,7 +548,8 @@ CI needs no model API keys, because tests use deterministic fake providers.
 These are true of the code today:
 
 - **No authentication, accounts or roles.** Nothing identifies who makes a request, so nothing can be restricted per user.
-- **No approval workflow.** The Approval Gateway is only a contract, and no human approval interface exists. Tools that declare side effects are therefore blocked everywhere.
+- **Approvals identify a channel, not a person.** Decisions record whether they came from the console (a trusted browser origin) or a local API client. Any program on this machine that can reach the API could also approve requests.
+- **Exactly-once effects aren't guaranteed.** If Genesis stops while an approved tool is running, its effect is unknown: the request records outcome `unknown`, and nothing is re-run automatically.
 - **Workflow steps have no Agent identity.** They don't inherit an Agent's permissions, and a workflow has no permission scope of its own beyond its stored steps.
 - **Workflow runs are not Executions.** They appear on the Workflows page, not in the Operations execution list.
 - **Some history is not durable.** Event, log and tool-run history live in memory and reset on restart.
@@ -559,12 +571,12 @@ Implemented foundations:
 - CI;
 - the redesigned console;
 - **Milestone 1: Centralized Tool Authorization & Execution Safety.** One policy for every tool call, explicit execution contexts, strict argument validation, schema checks at registration, a bounded calculator, and local Host and Origin protection.
+- **Milestone 2: Approval Gateway (awaiting review).** Durable, single-use approvals bound to the exact operation; paused and resumed chat turns and workflow steps; operator tests that run once when approved; an Approvals page. Decisions record a local channel, not an authenticated identity.
 
 Planned, in order (no dates):
 
 | Milestone | Scope |
 |---|---|
-| 2. Approval Gateway | Durable approval decisions tied to the exact operation, who can approve, expiry, and safely resuming approved work. Needs an operator-identity decision first. |
 | 3. Durable execution and unified observability | Workflow runs as first-class executions, durable event and tool history, correlation and diagnosis. |
 | 4. Authoritative tool contracts and workflow management | Backend tool schemas served to clients; editing and deleting definitions; migration of versioned definitions. |
 | 5. LLM runtime reliability | Consistent error classification, timeouts, safe retries, rate limits and fallbacks. |
@@ -582,6 +594,7 @@ Planned, in order (no dates):
 | `403 Requests from this origin are not allowed.` | A browser page whose origin isn't in `CORS_ORIGINS` tried to change state. If it is your own frontend on another port, add its exact origin and restart. |
 | Console shows "Can't reach Genesis" or empty data | The backend is not running on `127.0.0.1:8000`, or the frontend's `NEXT_PUBLIC_*` addresses point elsewhere. |
 | A model shows "Configured" but chats fail | A key is present but requests fail. Use **Send test request** on Providers and look for `llm.failed` events in Operations. Common causes: an invalid key, quota, or a model name the account can't use. |
+| A message, workflow step or test says it's waiting for approval | The tool declares side effects. Open **Approvals**, review the exact call and approve or reject it; the waiting work continues on its own. New messages to that Agent are refused until it's decided. |
 | A tool call is refused | Check the reason in the response or the `tool.rejected` event: the tool isn't in the Agent's allowed tools, the arguments don't match its schema, or the tool needs approval. |
 | A run or execution is **interrupted** | Genesis stopped while work that may have had external effects was in flight. Retry it (with acknowledgement) or cancel it. |
 

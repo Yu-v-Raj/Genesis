@@ -263,6 +263,7 @@ def _step_columns(run_id: UUID, position: int, task: WorkflowTask) -> dict[str, 
         "result": task.result,
         "error": task.error,
         "step_metadata": dict(task.metadata),
+        "approval_id": task.approval_id,
     }
 
 
@@ -296,6 +297,7 @@ def _run_from_row(row: WorkflowRunRow, steps: Sequence[WorkflowRunStepRow]) -> W
                 finished_at=None if step.finished_at is None else _aware(step.finished_at),
                 result=step.result,
                 error=step.error,
+                approval_id=step.approval_id,
                 metadata=step.step_metadata or {},
             )
             for step in steps

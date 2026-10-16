@@ -22,8 +22,8 @@ from backend.app.database.base import Base
 
 
 JSONType = JSON().with_variant(JSONB(), "postgresql")
-RUN_STATUSES = "('created', 'queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'interrupted')"
-STEP_STATUSES = "('pending', 'ready', 'running', 'completed', 'failed', 'cancelled', 'blocked', 'interrupted')"
+RUN_STATUSES = "('created', 'queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'interrupted', 'waiting_approval')"
+STEP_STATUSES = "('pending', 'ready', 'running', 'completed', 'failed', 'cancelled', 'blocked', 'interrupted', 'waiting_approval')"
 
 
 class WorkflowDefinitionRow(Base):
@@ -89,3 +89,4 @@ class WorkflowRunStepRow(Base):
     result: Mapped[object | None] = mapped_column(JSONType)
     error: Mapped[str | None] = mapped_column(Text)
     step_metadata: Mapped[dict[str, object]] = mapped_column("metadata", JSONType)
+    approval_id: Mapped[UUID | None] = mapped_column(Uuid)

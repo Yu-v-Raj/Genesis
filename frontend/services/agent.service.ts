@@ -6,6 +6,7 @@ import type {
   AgentConfigurationInput,
   LLMModelOption,
   AgentChatResponse,
+  AgentChatWaiting,
   AgentSession,
   AgentSessionList,
 } from "@/types/agents";
@@ -76,8 +77,9 @@ export const AgentService = Object.freeze({
   listSessions: (agentId: string): Promise<AgentSessionList> => request<AgentSessionList>(`/${agentId}/sessions`),
   startSession: (agentId: string): Promise<AgentSession> =>
     request<AgentSession>(`/${agentId}/sessions`, { method: "POST" }),
-  chat: (agentId: string, message: string, sessionId?: string | null): Promise<AgentChatResponse> =>
-    request<AgentChatResponse>(`/${agentId}/chat`, {
+  /** The reply, or (HTTP 202) a turn paused for the operator's approval of a tool call. */
+  chat: (agentId: string, message: string, sessionId?: string | null): Promise<AgentChatResponse | AgentChatWaiting> =>
+    request<AgentChatResponse | AgentChatWaiting>(`/${agentId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sessionId ? { message, session_id: sessionId } : { message }),

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, Bot, BrainCircuit, Cpu, CornerDownLeft, LayoutGrid, PanelLeft, Plus, Search, Workflow, Wrench, X, type LucideIcon } from "lucide-react";
+import { Activity, Bot, BrainCircuit, Cpu, CornerDownLeft, LayoutGrid, PanelLeft, Plus, Search, ShieldCheck, Workflow, Wrench, X, type LucideIcon } from "lucide-react";
 
 import { IconButton } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 
 const ICONS: Record<string, LucideIcon> = {
   "go:/": LayoutGrid, "go:/agents": Bot, "go:/memory": BrainCircuit, "go:/workflows": Workflow,
-  "go:/monitoring": Activity, "go:/tools": Wrench, "go:/providers": Cpu,
+  "go:/monitoring": Activity, "go:/approvals": ShieldCheck, "go:/tools": Wrench, "go:/providers": Cpu,
   "action:create-agent": Plus, "action:create-workflow": Plus, "action:toggle-sidebar": PanelLeft,
 };
 

@@ -17,7 +17,7 @@ export type StatusFilter = "all" | "active" | "completed" | "attention" | "cance
 export const STATUS_GROUPS: Readonly<Record<Exclude<StatusFilter, "all">, readonly ExecutionStatus[]>> = {
   active: ["pending", "queued", "starting", "running"],
   completed: ["completed"],
-  attention: ["failed", "interrupted"],
+  attention: ["failed", "interrupted", "waiting_approval"],
   cancelled: ["cancelled"],
 };
 
@@ -197,9 +197,24 @@ const ERROR_CATEGORIES: Readonly<Record<string, string>> = {
   storage: "Storage error",
   chat_failed: "Chat failed",
   tool_failed: "Tool failed",
+  tool_denied: "Refused by tool policy",
   execution_failed: "Run failed",
   interrupted: "Interrupted by a restart",
 };
+
+/**
+ * What a category means, where the label alone could mislead. A refusal and a failure are
+ * different: a refused tool never started; a failed one ran and reported an error.
+ */
+const ERROR_EXPLANATIONS: Readonly<Record<string, string>> = {
+  tool_denied:
+    "The server's tool policy refused this call before the tool ran, so nothing was executed. For example, the tool isn't in the Agent's allowed tools, it's disabled, or its arguments were invalid or too large.",
+  tool_failed: "The tool started running and then reported a failure.",
+};
+
+export function errorCategoryExplanation(category: string | null | undefined): string | null {
+  return category ? ERROR_EXPLANATIONS[category] ?? null : null;
+}
 
 /** A readable name for a backend error category; unknown categories are shown as written. */
 export function errorCategoryLabel(category: string | null | undefined): string | null {

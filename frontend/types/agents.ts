@@ -67,6 +67,15 @@ export interface AgentChatResponse {
   tool_activities: ToolActivity[];
 }
 
+/** HTTP 202 from chat: the turn paused before a tool call that needs the operator's approval. */
+export interface AgentChatWaiting {
+  status: "waiting_approval";
+  execution_id: string;
+  session_id: string;
+  approval_id: string;
+  detail: string;
+}
+
 export interface SessionMessage {
   role: "user" | "assistant" | "tool";
   content: string;

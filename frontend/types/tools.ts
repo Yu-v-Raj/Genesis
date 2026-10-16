@@ -41,3 +41,11 @@ export interface ToolExecutionInput {
   metadata?: Record<string, unknown>;
   execution_id?: string;
 }
+
+/** The server held an operator test for approval (HTTP 202); nothing ran. */
+export interface ToolApprovalPending {
+  detail: string;
+  outcome: "approval_required";
+  reason: string | null;
+  approval_id: string;
+}

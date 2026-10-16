@@ -86,8 +86,10 @@ class DenialReason(StrEnum):
     STEP_MISMATCH = "step_mismatch"
     PERMISSION_UNENFORCEABLE = "permission_unenforceable"
     INVALID_ARGUMENTS = "invalid_arguments"
+    ARGUMENTS_TOO_LARGE = "arguments_too_large"
     APPROVAL_REQUIRED = "approval_required"
     APPROVAL_DENIED = "approval_denied"
+    APPROVAL_UNUSABLE = "approval_unusable"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -96,7 +98,9 @@ class ToolAuthorizationDecision:
     reason: DenialReason | None = None
     # Safe to show to a person or a model: never includes arguments or internal detail.
     message: str = ""
-    approval_id: str | None = None
+    # The approval standing for this exact operation: APPROVED (when allowed) or PENDING.
+    approval_id: UUID | None = None
+    operation_digest: str | None = None
 
     @property
     def allowed(self) -> bool:

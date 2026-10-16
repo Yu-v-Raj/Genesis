@@ -26,9 +26,9 @@ class WorkflowCreateRequest(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
     tasks: list[WorkflowTaskCreateRequest] = Field(min_length=1)
 class WorkflowTaskResponse(BaseModel):
-    task_id: str; workflow_id: UUID | None; name: str; action: str; configuration: dict[str, object]; dependencies: list[str]; status: WorkflowTaskStatus; created_at: datetime; started_at: datetime | None; finished_at: datetime | None; result: object | None; error: str | None; metadata: dict[str, object]
+    task_id: str; workflow_id: UUID | None; name: str; action: str; configuration: dict[str, object]; dependencies: list[str]; status: WorkflowTaskStatus; created_at: datetime; started_at: datetime | None; finished_at: datetime | None; result: object | None; error: str | None; metadata: dict[str, object]; approval_id: UUID | None = None
     @classmethod
-    def from_task(cls, task: WorkflowTask) -> "WorkflowTaskResponse": return cls(task_id=task.task_id, workflow_id=task.workflow_id, name=task.name, action=task.action, configuration=dict(task.configuration), dependencies=list(task.dependencies), status=task.status, created_at=task.created_at, started_at=task.started_at, finished_at=task.finished_at, result=task.result, error=task.error, metadata=dict(task.metadata))
+    def from_task(cls, task: WorkflowTask) -> "WorkflowTaskResponse": return cls(task_id=task.task_id, workflow_id=task.workflow_id, name=task.name, action=task.action, configuration=dict(task.configuration), dependencies=list(task.dependencies), status=task.status, created_at=task.created_at, started_at=task.started_at, finished_at=task.finished_at, result=task.result, error=task.error, metadata=dict(task.metadata), approval_id=task.approval_id)
 class WorkflowResponse(BaseModel):
     """One workflow run. ``definition_id``/``definition_version`` name the plan it snapshots."""
     workflow_id: UUID; name: str; description: str; status: WorkflowStatus; created_at: datetime; updated_at: datetime; metadata: dict[str, object]; tasks: list[WorkflowTaskResponse]
